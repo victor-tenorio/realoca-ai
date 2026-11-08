@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+from decimal import Decimal
 import math
 from typing import Any
 
@@ -32,15 +33,13 @@ def _plan(snapshot: dict) -> dict:
     employees = {employee["employee_id"]: employee for employee in data["employees"]}
     absent = set(data["absent_employee_ids"])
     exclusions = _normalize_exclusions(data["exclusions"])
-    utilization = data["policies"].get("max_utilization_pct", 90)
+    utilization = _as_decimal(data["policies"]["max_utilization_pct"])
+    zero = Decimal("0")
 
     remaining = {
-        employee_id: max(
-            0.0,
-            employee["shift_hours"] * (utilization / 100)
-            - employee["committed_hours"]
-            - employee["reserved_hours"],
-        )
+        employee_id: max(zero, _effective_capacity(employee, utilization)
+                         - _as_decimal(employee["committed_hours"])
+                         - _as_decimal(employee["reserved_hours"]))
         for employee_id, employee in employees.items()
     }
     assignments: list[dict[str, Any]] = []
@@ -75,7 +74,8 @@ def _plan(snapshot: dict) -> dict:
             if employee_id in exclusions.get(task["task_id"], set()):
                 continue
             non_excluded_candidates.append((employee_id, employee))
-            if remaining[employee_id] + 1e-9 < task["estimated_hours"]:
+            task_hours = _as_decimal(task["estimated_hours"])
+            if remaining[employee_id] < task_hours:
                 continue
             # Prefer the least flexible eligible employee, then lower current
             # utilization and stable employee ID. Avoid approval-required
@@ -85,7 +85,7 @@ def _plan(snapshot: dict) -> dict:
                 for other in tasks
                 if set(other["required_skills"]).issubset(employee["skills"])
             )
-            effective_capacity = employee["shift_hours"] * (utilization / 100)
+            effective_capacity = _effective_capacity(employee, utilization)
             used = effective_capacity - remaining[employee_id]
             requires_approval = _requires_approval(task, employee, data["policies"])
             candidates.append((requires_approval, flexibility, used, employee_id))
@@ -99,14 +99,13 @@ def _plan(snapshot: dict) -> dict:
             elif not non_excluded_candidates:
                 reason_code = "ALL_CANDIDATES_EXCLUDED"
             else:
-                # Remaining capacity and detailed deadline/shift feasibility
-                # are handled only partially here; M04 completes those checks.
-                reason_code = "NO_ELIGIBLE_CANDIDATE"
+                reason_code = "INSUFFICIENT_CAPACITY"
             uncovered.append(_uncovered(task, reason_code, []))
             continue
 
         requires_approval, _, _, candidate_id = candidates[0]
-        remaining[candidate_id] -= task["estimated_hours"]
+        task_hours = _as_decimal(task["estimated_hours"])
+        remaining[candidate_id] -= task_hours
         skills = ", ".join(task["required_skills"])
         approval_note = "; proposta requer aprovação BP segundo a política" if requires_approval else ""
         assignments.append(
@@ -245,6 +244,15 @@ def _requires_approval(task: dict, employee: dict, policies: dict) -> bool:
     if same_known_team:
         return not policies.get("allow_automatic_same_team", True)
     return policies.get("cross_team_requires_bp", True)
+
+
+def _as_decimal(value: int | float) -> Decimal:
+    """Use decimal string conversion to match persisted Decimal hour values."""
+    return Decimal(str(value))
+
+
+def _effective_capacity(employee: dict, utilization_pct: Decimal) -> Decimal:
+    return _as_decimal(employee["shift_hours"]) * utilization_pct / Decimal("100")
 
 
 def _normalize_exclusions(exclusions: Any) -> dict[str, set[str]]:

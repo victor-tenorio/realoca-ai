@@ -387,7 +387,7 @@ function CasesPage({ employees, refreshKey }: { employees: Resource<Employee[]>;
           </div>
         )}
       </section>
-      <CasesExplorer focusCaseId={result?.case_id} refreshKey={refreshKey} />
+      <CasesExplorer key={result?.case_id || "existing"} focusCaseId={result?.case_id} refreshKey={refreshKey} />
     </div>
   );
 }

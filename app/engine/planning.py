@@ -37,7 +37,7 @@ def _plan(snapshot: dict) -> dict:
     remaining = {
         employee_id: max(
             0.0,
-            employee["shift_hours"] * utilization / 100
+            employee["shift_hours"] * (utilization / 100)
             - employee["committed_hours"]
             - employee["reserved_hours"],
         )
@@ -57,45 +57,64 @@ def _plan(snapshot: dict) -> dict:
         if not task["transfer_allowed"]:
             uncovered.append(_uncovered(task, "TRANSFER_NOT_ALLOWED", []))
             continue
+        if task.get("status") == "done":
+            uncovered.append(_uncovered(task, "TASK_ALREADY_DONE", []))
+            continue
 
+        available_candidates = []
+        skill_candidates = []
+        non_excluded_candidates = []
         candidates = []
         for employee_id, employee in employees.items():
             if employee_id in absent or employee["availability"] != "available":
                 continue
+            available_candidates.append(employee)
             if not set(task["required_skills"]).issubset(employee["skills"]):
                 continue
+            skill_candidates.append(employee)
             if employee_id in exclusions.get(task["task_id"], set()):
                 continue
+            non_excluded_candidates.append((employee_id, employee))
             if remaining[employee_id] + 1e-9 < task["estimated_hours"]:
                 continue
             # Prefer the least flexible eligible employee, then lower current
-            # utilization and stable employee ID as deterministic tie-breakers.
+            # utilization and stable employee ID. Avoid approval-required
+            # proposals when an otherwise eligible same-team option exists.
             flexibility = sum(
                 1
                 for other in tasks
                 if set(other["required_skills"]).issubset(employee["skills"])
             )
-            used = (
-                employee["committed_hours"]
-                + employee["reserved_hours"]
-                + (employee["shift_hours"] * utilization / 100 - remaining[employee_id])
-            )
-            candidates.append((flexibility, used, employee_id))
+            effective_capacity = employee["shift_hours"] * (utilization / 100)
+            used = effective_capacity - remaining[employee_id]
+            requires_approval = _requires_approval(task, employee, data["policies"])
+            candidates.append((requires_approval, flexibility, used, employee_id))
 
         candidates.sort()
         if not candidates:
-            uncovered.append(_uncovered(task, "NO_ELIGIBLE_CANDIDATE", []))
+            if not available_candidates:
+                reason_code = "NO_AVAILABLE_CANDIDATE"
+            elif not skill_candidates:
+                reason_code = "NO_SKILL_MATCH"
+            elif not non_excluded_candidates:
+                reason_code = "ALL_CANDIDATES_EXCLUDED"
+            else:
+                # Remaining capacity and detailed deadline/shift feasibility
+                # are handled only partially here; M04 completes those checks.
+                reason_code = "NO_ELIGIBLE_CANDIDATE"
+            uncovered.append(_uncovered(task, reason_code, []))
             continue
 
-        candidate_id = candidates[0][2]
+        requires_approval, _, _, candidate_id = candidates[0]
         remaining[candidate_id] -= task["estimated_hours"]
         skills = ", ".join(task["required_skills"])
+        approval_note = "; proposta requer aprovação BP segundo a política" if requires_approval else ""
         assignments.append(
             {
                 "task_id": task["task_id"],
                 "candidate_employee_id": candidate_id,
                 "estimated_hours": task["estimated_hours"],
-                "reason": f"Competências disponíveis ({skills}); capacidade elegível",
+                "reason": f"Competências disponíveis ({skills}); candidato elegível{approval_note}",
             }
         )
 
@@ -174,6 +193,12 @@ def _normalize_task(task: Any) -> dict:
     task["required_skills"] = _skills(task["required_skills"], f"task {task['task_id']} required_skills")
     if not isinstance(task["transfer_allowed"], bool):
         raise SnapshotValidationError(f"transfer_allowed must be boolean for task {task['task_id']}")
+    if "status" in task and (
+        not isinstance(task["status"], str)
+        or task["status"] not in {"open", "in_progress", "done"}
+    ):
+        raise SnapshotValidationError(f"invalid status for task {task['task_id']}")
+    _validate_optional_team_id(task, f"task {task['task_id']}")
     _required(task, ("due_at",), f"task {task['task_id']}")
     _iso_datetime(task["due_at"], f"task {task['task_id']} due_at")
     return task
@@ -201,7 +226,25 @@ def _normalize_employee(employee: Any) -> dict:
     employee["shift_hours"] = _clean_number(employee["shift_hours"])
     if not isinstance(employee["availability"], str) or employee["availability"] not in {"available", "absent", "unavailable"}:
         raise SnapshotValidationError(f"invalid availability for employee {employee['employee_id']}")
+    _validate_optional_team_id(employee, f"employee {employee['employee_id']}")
     return employee
+
+
+def _validate_optional_team_id(record: dict, label: str) -> None:
+    if "team_id" in record and record["team_id"] is not None and not _nonempty_string(record["team_id"]):
+        raise SnapshotValidationError(f"{label} team_id must be a non-empty string when provided")
+
+
+def _requires_approval(task: dict, employee: dict, policies: dict) -> bool:
+    if task["priority"] == "critical" and policies.get("critical_requires_bp", True):
+        return True
+
+    task_team = task.get("team_id")
+    employee_team = employee.get("team_id")
+    same_known_team = task_team is not None and employee_team is not None and task_team == employee_team
+    if same_known_team:
+        return not policies.get("allow_automatic_same_team", True)
+    return policies.get("cross_team_requires_bp", True)
 
 
 def _normalize_exclusions(exclusions: Any) -> dict[str, set[str]]:

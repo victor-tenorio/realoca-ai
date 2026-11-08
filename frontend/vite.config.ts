@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import { loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
       environment: "jsdom",
       setupFiles: "./src/test/setup.ts",
       clearMocks: true,
+      exclude: [...configDefaults.exclude, "e2e/**"],
     },
   };
 });

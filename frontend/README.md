@@ -14,6 +14,7 @@ Use Node.js 20.19+ ou 22.12+ e npm. No PowerShell:
 Comandos de qualidade:
 
     npm test
+    npm run test:e2e
     npm run lint
     npm run typecheck
     npm run build
@@ -34,8 +35,18 @@ O backend atual não tem rotas implementadas para consulta de casos, dashboard, 
 
 Em produção, se o frontend e API estiverem em origens diferentes, o backend precisará permitir explicitamente a origem implantada via CORS. Não foi alterada a configuração do backend porque a origem final ainda não existe.
 
+## Simulador Slack e estados
+
+O Simulador Slack é uma demonstração isolada com quatro cenários fixos e fictícios. Aceites e recusas alteram somente o estado React da página; nenhum endpoint de callback é chamado, nenhum dado é gravado e não se alega que uma mensagem saiu pelo Slack. O backend atual só aceita callbacks autenticados para ofertas reais não simuladas; não existe um endpoint de resposta do simulador no contrato/backend.
+
+Os indicadores do dashboard somam as estimativas das tarefas `open` e `in_progress`; `done` não entra na demanda ativa. Uma lista vazia retornada pela API produz zero; falha ou dado ainda carregando permanece indisponível. Casos, aprovações, reservas por tentativa, auditoria e cobertura confirmada não são calculados sem as consultas correspondentes.
+
+## Testes ponta a ponta
+
+Playwright inicia uma instância Vite exclusiva na porta 5188 (`--strictPort`) e intercepta as consultas da API com fixtures determinísticas. Os fluxos de ausência não escrevem no banco real. Para instalar o navegador Chromium do Playwright, execute `npx playwright install chromium`; depois `npm run test:e2e`. O relatório HTML e screenshots ficam em `playwright-report/` e `test-results/`, ignorados pelo Git. `npm run test:e2e:ui` abre a interface de depuração.
+
 ## Dados e segurança
 
-O frontend não tem fixtures de demonstração em runtime e não contém tokens. O modo de desenvolvimento usa apenas o proxy e a API real. Os dados de aprovação, reserva, aceite, cobertura confirmada e conclusão permanecem distinguíveis; a interface não atualiza estados localmente para fingir uma resposta do servidor.
+As telas operacionais consultam a API real; os únicos dados fictícios em runtime pertencem ao Simulador Slack, isolado e rotulado. O frontend não contém tokens. Os dados de aprovação, reserva, aceite, cobertura confirmada e conclusão permanecem distinguíveis; a interface operacional não atualiza estados localmente para fingir uma resposta do servidor.
 
 Um npm run build gera frontend/dist, ignorado pelo Git. O arquivo frontend/.env.example contém somente endereços não sensíveis. Para incorporar uma futura exportação do Lovable, revisar e mesclar componentes em frontend/src; não inicializar um repositório Git dentro desta pasta.

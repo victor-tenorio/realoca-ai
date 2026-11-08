@@ -15,6 +15,7 @@ from app.db import get_session
 from app.enums import AttemptStatus, Channel, IntegrationEventType
 from app.models import CoverageAttempt, OutboundMessage, ProcessedEvent
 from app.services.event_processing import process_event
+from app.services.deadlines import expiry_timestamp_reaches_deadline
 
 router = APIRouter(prefix="/api/v1/integrations", tags=["integrations"])
 
@@ -85,7 +86,9 @@ def _validate_event(session: Session, data: AttemptEvent, now: datetime) -> None
         if now >= attempt.response_deadline_at or data.occurred_at >= attempt.response_deadline_at:
             raise HTTPException(status.HTTP_409_CONFLICT, "response deadline has passed")
     elif data.event_type == IntegrationEventType.EXPIRED:
-        if now < attempt.response_deadline_at or data.occurred_at < attempt.response_deadline_at:
+        if (now < attempt.response_deadline_at
+                or not expiry_timestamp_reaches_deadline(
+                    data.occurred_at, attempt.response_deadline_at)):
             raise HTTPException(status.HTTP_409_CONFLICT, "attempt has not expired")
 
     if data.event_type in RESPONSE_EVENTS:

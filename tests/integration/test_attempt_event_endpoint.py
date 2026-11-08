@@ -86,8 +86,10 @@ def test_receipt_is_durable_and_duplicate_is_idempotent(callback_client):
     assert repeat.json()["duplicate"] is True
     events = session.scalars(select(ProcessedEvent)).all()
     assert len(events) == 1
-    assert events[0].processed_at is None
-    assert events[0].result is None
+    # A14/A15 worker now processes the durable inbox in the background.
+    # The deliberately unreserved test attempt must be rejected safely.
+    assert events[0].processed_at is not None
+    assert events[0].result["status"] == "rejected"
     session.refresh(attempt)
     session.refresh(task)
     assert attempt.status == AttemptStatus.NOTIFIED

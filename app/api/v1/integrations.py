@@ -5,15 +5,16 @@ from datetime import datetime, timedelta, timezone
 from secrets import compare_digest
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import get_session
 from app.enums import AttemptStatus, Channel, IntegrationEventType
 from app.models import CoverageAttempt, OutboundMessage, ProcessedEvent
+from app.services.event_processing import process_event
 
 router = APIRouter(prefix="/api/v1/integrations", tags=["integrations"])
 
@@ -99,14 +100,11 @@ def _validate_event(session: Session, data: AttemptEvent, now: datetime) -> None
 @router.post("/attempt-events", status_code=status.HTTP_202_ACCEPTED)
 def receive_attempt_event(
     data: AttemptEvent,
+    background_tasks: BackgroundTasks,
     x_internal_token: Annotated[str | None, Header(alias="X-Internal-Token")] = None,
     session: Session = Depends(get_session),
 ) -> dict[str, str | bool]:
-    """Acknowledge durable receipt, NOT task reassignment or employee acceptance.
-
-    Events stay unprocessed in the inbox until a separate transition worker applies
-    policy, capacity, reservation release and assignment atomically.
-    """
+    """Persist first, then apply the event after commit via a transition worker."""
     expected = os.getenv("INTEGRATIONS_INTERNAL_TOKEN")
     if not expected:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "integration authentication not configured")
@@ -132,5 +130,8 @@ def receive_attempt_event(
         if existing is not None:
             return _replay(existing, data)
         raise HTTPException(status.HTTP_409_CONFLICT, "conflicting callback") from None
+
+    background_tasks.add_task(process_event, sessionmaker(bind=session.get_bind()),
+                              data.event_id)
 
     return {"event_id": data.event_id, "status": "queued", "duplicate": False}

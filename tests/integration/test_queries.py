@@ -133,8 +133,8 @@ def test_unsupported_parameters_are_standard_400(client, path, query):
     assert set(response.json()["error"]) == {"code", "message", "details"}
 
 
-def test_teams_is_not_published_and_health_is_preserved(client):
-    assert client.get("/api/v1/teams").status_code == 404
+def test_teams_extension_and_health_are_preserved(client):
+    assert client.get("/api/v1/teams").status_code == 200
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/v1/health").status_code == 404
     schema = client.get("/openapi.json").json()

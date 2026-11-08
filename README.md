@@ -94,14 +94,16 @@ Em outro PowerShell:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 $employees = Invoke-RestMethod http://127.0.0.1:8000/api/v1/employees
+$teams = Invoke-RestMethod http://127.0.0.1:8000/api/v1/teams
 $tasks = Invoke-RestMethod http://127.0.0.1:8000/api/v1/tasks
 $employees | Select-Object employee_id, name, team_id, committed_hours, reserved_hours
+$teams | Select-Object team_id, name, employee_count, occupied_hours, utilization_pct, complete
 $tasks | Select-Object task_id, title, team_id, assignee_employee_id, status
 # Seleção local no cliente; não é um filtro da API:
 $tasks | Where-Object { $_.status -ne "done" }
 ```
 
-Abra `http://127.0.0.1:8000/docs`, expanda **employees** ou **tasks**, clique em
+Abra `http://127.0.0.1:8000/docs`, expanda **employees**, **teams** ou **tasks**, clique em
 **Try it out** e **Execute**. Os schemas de sucesso e erro estão disponíveis ali.
 As respostas são arrays JSON, sem paginação. Não há filtros contratados ou token
 exigido para essas consultas. Query strings, inclusive `status`, `team_id`,
@@ -114,14 +116,20 @@ Ausência é derivada dos registros confirmados que intersectam o turno. Uma pes
 presente e sem folga pode continuar `available`; disponibilidade não significa
 que ela possa receber trabalho adicional.
 
-Dados incompletos bloqueiam toda a listagem com HTTP 422 e campos pendentes em
+Nas consultas de funcionários e tarefas, dados incompletos bloqueiam toda a
+listagem com HTTP 422 e campos pendentes em
 `error.details.records`, sem inventar zero/arrays vazios ou ocultar registros.
-O contrato v1.1 aceita somente Slack: novos seeds usam `slack`, mas reexecutar o
+O contrato v1.2 aceita somente Slack: novos seeds usam `slack`, mas reexecutar o
 seed preserva dados existentes. Pessoas legadas com `teams` precisam de correção
 explícita na fonte antes de serem publicadas; o GET não escreve nem converte.
 
-`GET /api/v1/teams` ainda não está contratado ou publicado. Consulte a
-[proposta de equipes](docs/teams-query-proposal.md) para schema e exemplo.
+`GET /api/v1/teams` implementa a extensão aprovada do contrato v1.2. Consulte a
+[proposta de equipes](docs/teams-query-proposal.md) e a seção 13 do contrato para
+schema e regras. Os totais são calculados a partir dos membros atuais e dos
+registros do turno configurado. Utilização é a soma da carga dividida pela soma
+da capacidade, nunca a média dos percentuais individuais. Dados incompletos de
+capacidade/estimativa produzem `null` e `complete=false`; capacidade zero produz
+utilização `null`. Pessoas sem equipe bloqueiam a listagem com HTTP 422.
 O frontend em outra origem precisará de CORS com uma lista explícita de origens
 permitidas; essa configuração depende da URL do frontend e não foi presumida.
 
@@ -129,6 +137,7 @@ Para verificar a implementação em bancos temporários:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/integration/test_queries.py -q
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_teams.py -q
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 

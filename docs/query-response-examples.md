@@ -1,5 +1,28 @@
 # Exemplos observados nas consultas
 
+`GET /api/v1/teams` — Atendimento no seed (um dos quatro registros):
+
+```json
+[
+  {
+    "team_id": "demo-atendimento",
+    "name": "Atendimento",
+    "reference_date": "2026-11-08",
+    "employee_count": 10,
+    "shift_hours": 80.0,
+    "committed_hours": 47.5,
+    "reserved_hours": 0.0,
+    "occupied_hours": 47.5,
+    "utilization_pct": 59.375,
+    "complete": true
+  }
+]
+```
+
+Totais validados do seed: Atendimento 47,5h/59,375%; Operações 50h/62,5%;
+Financeiro 75,5h/94,375%; Tecnologia 52,5h/65,625%. Todas têm dez membros,
+80h nominais e zero reservas iniciais. Os valores são calculados do banco.
+
 Obtidos por `TestClient` com migrações e seed em SQLite descartável, usando a
 referência 2026-11-08. As respostas completas tinham 40 funcionários e 187
 tarefas. Os arrays abaixo mostram um registro de cada resposta, sem mudar

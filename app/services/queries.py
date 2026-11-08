@@ -5,12 +5,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import DEMO_REFERENCE_DATE
-from app.enums import Availability, Channel
+from app.enums import Availability, Channel, TaskStatus
 from app.errors import APIError
-from app.models import Absence, Employee, Shift, Task
+from app.models import Absence, Employee, Shift, Task, Team
 from app.schemas.employees import EmployeeResponse
 from app.schemas.tasks import TaskResponse
-from app.services.capacity import employee_capacities
+from app.schemas.teams import TeamResponse
+from app.services.capacity import (
+    ZERO,
+    calculate_capacity,
+    employee_capacities,
+    sum_known_hours,
+)
 from app.services.data_quality import (
     employee_publication_issues,
     task_publication_issues,
@@ -44,6 +50,79 @@ def reference_shift(session: Session) -> Shift | None:
     return session.scalar(
         select(Shift).where(Shift.reference_date == DEMO_REFERENCE_DATE)
     )
+
+
+def list_teams(session: Session) -> list[TeamResponse]:
+    with session.no_autoflush:
+        teams = list(session.scalars(select(Team).order_by(Team.team_id)))
+        employees = list(
+            session.execute(select(Employee.employee_id, Employee.team_id))
+        )
+        incomplete(
+            [
+                {"id": employee_id, "fields": ["team_id"]}
+                for employee_id, team_id in employees
+                if team_id is None
+            ]
+        )
+        if not teams:
+            return []
+        shift = reference_shift(session)
+        capacities = (
+            employee_capacities(
+                session, [row.employee_id for row in employees], shift.shift_id
+            )
+            if shift is not None
+            else {}
+        )
+        unknown_owners = set()
+        if shift is not None:
+            for task_id, team_id in session.execute(
+                select(Task.task_id, Task.team_id).where(
+                    Task.shift_id == shift.shift_id,
+                    Task.status != TaskStatus.DONE,
+                    Task.assignee_employee_id.is_(None),
+                )
+            ):
+                incomplete(
+                    [{"id": task_id, "fields": ["team_id", "assignee_employee_id"]}]
+                    if team_id is None
+                    else []
+                )
+                unknown_owners.add(team_id)
+        members = {team.team_id: [] for team in teams}
+        for employee_id, team_id in employees:
+            # Without a persisted shift there are no task/reservation records for
+            # this date. Member capacity stays unknown; never invent a shift.
+            members[team_id].append(
+                capacities.get(employee_id, calculate_capacity(None, ZERO, ZERO))
+            )
+        results = []
+        for team in teams:
+            people = members[team.team_id]
+            nominal = sum_known_hours(row.shift_hours for row in people)
+            committed = (
+                None
+                if team.team_id in unknown_owners
+                else sum_known_hours(row.committed_hours for row in people)
+            )
+            reserved = sum((row.reserved_hours for row in people), ZERO)
+            capacity = calculate_capacity(nominal, committed, reserved)
+            results.append(
+                TeamResponse(
+                    team_id=team.team_id,
+                    name=team.name,
+                    reference_date=DEMO_REFERENCE_DATE,
+                    employee_count=len(people),
+                    shift_hours=capacity.shift_hours,
+                    committed_hours=capacity.committed_hours,
+                    reserved_hours=capacity.reserved_hours,
+                    occupied_hours=capacity.occupied_hours,
+                    utilization_pct=capacity.utilization_pct,
+                    complete=capacity.complete,
+                )
+            )
+        return results
 
 
 def list_employees(session: Session) -> list[EmployeeResponse]:

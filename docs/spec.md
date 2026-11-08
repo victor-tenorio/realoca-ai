@@ -331,9 +331,17 @@ Os handlers também normalizam 404/405. `/health` continua fora de `/api/v1`.
 
 ### Equipes e frontend
 
-Não existe rota de equipes no contrato v1.1. A proposta concreta de rota, schema,
-exemplo e cálculo de agregados está em `docs/teams-query-proposal.md`, pendente
-de alinhamento com consumidores. Não é um endpoint implementado.
+A proposta de equipes foi aprovada por Mateus, conforme informado pela usuária.
+`GET /api/v1/teams` integra a extensão compatível do contrato v1.2, seção 13.
+Schema, exemplo e regras estão também em `docs/teams-query-proposal.md`.
+O serviço reutiliza o cálculo individual em lote e agrega por equipe atual;
+não consulta novamente por equipe ou membro. Campos desconhecidos propagam
+`null` no agregado correspondente e `complete=false`, sem publicar somas parciais.
+O helper `team_capacity` anterior mantém sua interface; a projeção da nova rota
+inclui adicionalmente reservas, ocupação e utilização. Sem turno para a data,
+capacidade de membros é desconhecida e os totais registrados de tarefas/reservas
+são zero, pois não existem vínculos com esse turno. Equipes sem membros têm
+capacidade/carga zero e utilização não aplicável.
 
 Não há filtros contratados a validar por valor: testes verificam a rejeição de
 parâmetros não suportados. Novos filtros por equipe, status, prioridade ou

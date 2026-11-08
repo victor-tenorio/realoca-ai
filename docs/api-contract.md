@@ -1,11 +1,12 @@
-# Realoca AI — Contrato de API e integração v1.1
+# Realoca AI — Contrato de API e integração v1.2
 
 > Fonte de verdade: https://app.notion.com/p/4111e6cf66888114b1fcdbbd9a93e075
 > Esta documentação define interfaces a implementar; não afirma que endpoints já existem.
 > Atualização 08/11/2026: Slack é o único canal de comunicação do MVP. Microsoft Teams foi retirado do escopo.
+> Extensão compatível v1.2: consulta de equipes aprovada por Mateus, responsável pelo frontend, conforme aprovação informada pela usuária. Os endpoints e payloads anteriores permanecem preservados.
 
 
-**REALOCA AI — CONTRATO TÉCNICO DE INTEGRAÇÃO v1.1**
+**REALOCA AI — CONTRATO TÉCNICO DE INTEGRAÇÃO v1.2**
 
 Decisão de arquitetura tomada em 07/11/2026 para implementação paralela por Amanda, Mateus e Victor. Este documento especifica o comportamento **esperado**; a existência dos endpoints no código e os testes devem ser verificados antes de marcá-los como entregues.
 
@@ -13,7 +14,7 @@ Decisão de arquitetura tomada em 07/11/2026 para implementação paralela por A
 **Fonte do produto:** [MVP](https://app.notion.com/p/4111e6cf668880c99eb2d4cd003a9d8e)
 **Checklist:** [DIVISÃO DE TAREFAS](https://app.notion.com/p/4111e6cf66888009976cd823b7a14e47)
 **Repositório:** [realoca-ai](https://github.com/victor-tenorio/realoca-ai)
-**Versão:** `1.1` — congelar nomes públicos dos campos até aprovação explícita do trio. Mudança incompatível exige nova versão e atualização de todos os consumidores.
+**Versão:** `1.2` — congelar nomes públicos dos campos até aprovação explícita do trio. Mudança incompatível exige nova versão e atualização de todos os consumidores.
 
 ## 1. Responsáveis e limites
 
@@ -105,6 +106,7 @@ O motor **não** consulta o banco diretamente, não notifica funcionários e nã
 | `GET /health` | Todos | Healthcheck simples da API |
 | `POST /api/v1/demo/reset` | Demo (restrito) | Recarregar seeds 100% fictícios |
 | `GET /api/v1/employees` | Front/Motor via Amanda | Lista equipes/capacidade/competências |
+| `GET /api/v1/teams` | Front | Equipes persistidas e agregados do turno de referência; seção 13 |
 | `GET /api/v1/tasks` | Front | Tarefas na fonte simulada e seus donos reais |
 | `POST /api/v1/absences` | Front/BP | Registrar ausência confirmada e criar caso |
 | `GET /api/v1/cases` | Front | Lista de casos, status e contagem |
@@ -233,7 +235,7 @@ A aplicação exportada do Lovable usa `API_BASE_URL` configurável. Não chama 
 - **Dashboard:** `GET /api/v1/dashboard` com ausências, tarefas afetadas, horas planejadas, horas confirmadas, tarefas concluídas, sem cobertura, equipes impactadas e recusas.
 - **Central de casos:** `GET /api/v1/cases` e `/cases/{id}`; abrir ausência via `POST /api/v1/absences`.
 - **Aprovação BP:** `POST /api/v1/proposals/{attempt_id}/approval`.
-- **Equipe/tarefas:** `GET /api/v1/employees` e `GET /api/v1/tasks`.
+- **Equipe/tarefas:** `GET /api/v1/employees`, `GET /api/v1/teams` e `GET /api/v1/tasks`.
 - **Auditoria:** `GET /api/v1/audit?case_id=...`.
 - **Simulador Slack:** UI envia resposta para webhook demo do n8n, nunca modifica atribuição direto no estado local.
 - **Estados visuais:** loading, error, empty, planned, approval, reserved/notified, accepted, refused, expired, escalated e completed.
@@ -272,3 +274,72 @@ A aplicação exportada do Lovable usa `API_BASE_URL` configurável. Não chama 
 - O que ocorre se não há substituto? Fornecer alternativas ao BP e marcar tarefa descoberta.
 
 **Regra final:** o contrato acima é a fonte única de integração. Qualquer dúvida estrutural deve resultar em ajuste explícito de versão no documento e no `docs/api-contract.md` do GitHub, com comunicação aos outros dois responsáveis.
+
+## 13. Extensão aprovada — GET /api/v1/teams
+
+Adição compatível baseada em `docs/teams-query-proposal.md`, aprovada por Mateus
+para consumo no frontend. HTTP 200 retorna `list[TeamResponse]`: array JSON
+direto, sem envelope, paginação ou filtros. Todos os campos abaixo são
+obrigatórios; somente os explicitamente indicados aceitam `null`.
+
+| Campo | Tipo JSON | Definição |
+| --- | --- | --- |
+| team_id | string | Identificador estável da equipe persistida |
+| name | string | Nome persistido da equipe |
+| reference_date | string (YYYY-MM-DD) | Data selecionada por DEMO_REFERENCE_DATE |
+| employee_count | integer | Quantidade de membros na equipe atual |
+| shift_hours | number ou null | Soma das capacidades dos membros no turno |
+| committed_hours | number ou null | Soma das estimativas das tarefas abertas dos membros |
+| reserved_hours | number | Soma das reservas ativas destinadas aos membros no turno |
+| occupied_hours | number ou null | committed_hours + reserved_hours |
+| utilization_pct | number ou null | 100 × soma da ocupação / soma da capacidade |
+| complete | boolean | Capacidade e compromisso conhecidos integralmente |
+
+Exemplo (um registro do array do seed, sem reservas):
+
+```json
+[
+  {
+    "team_id": "demo-atendimento",
+    "name": "Atendimento",
+    "reference_date": "2026-11-08",
+    "employee_count": 10,
+    "shift_hours": 80.0,
+    "committed_hours": 47.5,
+    "reserved_hours": 0.0,
+    "occupied_hours": 47.5,
+    "utilization_pct": 59.375,
+    "complete": true
+  }
+]
+```
+
+Regras aprovadas:
+
+- Equipes e nomes vêm de `teams`; membros são agrupados pela equipe atual. Carga
+  e reservas acompanham o responsável/candidato atual, independentemente da
+  equipe de origem da tarefa. Tarefas concluídas não entram na carga.
+- Todos os valores pertencem ao turno da data configurada. Reservas com baixa e
+  tarefas de outros turnos são excluídas. A consulta é somente leitura.
+- Utilização é a razão dos totais, calculada com Decimal, sem média simples de
+  percentuais individuais ou arredondamento intermediário. Pode exceder 90% ou
+  100% para cargas preexistentes.
+- Capacidade ou estimativa desconhecida torna o agregado correspondente `null`
+  e `complete=false`. Ocupação depende de compromisso conhecido; utilização
+  depende também de capacidade conhecida e total maior que zero. Zero é um
+  valor conhecido; denominador zero produz utilização `null`, sem divisão.
+- Sem membros, capacidade e carga são zero e utilização é `null`. Tarefas
+  abertas sem responsável tornam o compromisso da equipe de origem desconhecido,
+  conforme a regra já documentada de agregados incompletos. Sem turno persistido
+  para a data, a capacidade de membros é desconhecida; não há tarefas/reservas
+  vinculadas a esse período inexistente, portanto seus totais registrados são zero.
+- Pessoas sem equipe impedem publicação com HTTP 422, no erro padrão
+  `INCOMPLETE_SOURCE_DATA`, sem criar equipe fictícia ou omitir pessoas. Tarefas
+  abertas sem responsável e sem equipe também impedem publicação, por não ser
+  possível atribuir o agregado incompleto a uma equipe.
+- Sem equipes/pessoas cadastradas, retorna `[]`. Não são aceitos parâmetros por
+  query string; parâmetros desconhecidos recebem HTTP 400 e
+  `INVALID_QUERY_PARAMETERS`. Os demais erros seguem as convenções gerais.
+- Assim como nas consultas existentes, não se exige token de integração n8n.
+  Autenticação futura do frontend permanece pendente de definição. Nenhum campo
+  adicional de RH, mensagem, diagnóstico ou credencial é exposto.

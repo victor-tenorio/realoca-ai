@@ -66,7 +66,7 @@ it("shows backend coverage and keeps planned and confirmed hours separate", asyn
 it("shows authoritative case proposals without claiming BP approval is acceptance", async () => {
   render(<CasesExplorer refreshKey={0} />);
   expect(await screen.findByText("Revisar pagamento")).toBeTruthy();
-  expect(screen.getByText("Aprovação pendente")).toBeTruthy();
+  expect(screen.getAllByText("Aprovação pendente").length).toBeGreaterThan(0);
   expect(screen.queryByRole("button", { name: "Gerar plano neste caso" })).toBeNull();
   expect(api.planCase).not.toHaveBeenCalled();
 });

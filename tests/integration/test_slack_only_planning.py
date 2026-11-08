@@ -53,9 +53,11 @@ def test_slack_only_planning_excludes_teams_and_blank_slack_recipients(session):
 
     # Release the read transaction before the writer-locked orchestration.
     session.rollback()
-    # Planning must be able to queue a real Slack offer instead of rolling
-    # the whole transaction back with SLACK_RECIPIENT_MISSING.
-    result = planning.plan_and_authorize(session, case.case_id, actor="test:slack")
+    assert not session.in_transaction()
+    # Rollback expires case's ORM attributes. Accessing case.case_id here
+    # would auto-open a read transaction before plan_and_authorize.begin().
+    # Use the known stable ID instead to keep a fresh transaction boundary.
+    result = planning.plan_and_authorize(session, "slack-only-case", actor="test:slack")
     assert result["proposals"]
     assert all(
         session.get(Employee, proposal["candidate_employee_id"]).preferred_channel == Channel.SLACK

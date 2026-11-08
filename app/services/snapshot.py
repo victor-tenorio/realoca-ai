@@ -1,9 +1,9 @@
 """A08: read a consistent, conservative input for the pure planning engine."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.enums import AttemptStatus
+from app.enums import AttemptStatus, Channel
 from app.errors import APIError
 from app.models import Absence, Case, CoverageAttempt, Employee, EmployeeShift, Shift
 from app.services.capacity import employee_capacities
@@ -66,6 +66,11 @@ def build(session: Session, case: Case, *, policy, plan_version: int) -> dict:
             EmployeeShift.shift_hours.is_not(None),
             EmployeeShift.shift_hours > 0,
             Employee.skills_known.is_(True),
+            # Demo integrates exclusively with Slack. Teams-only, missing or
+            # blank recipients cannot be sent an offer by the current n8n flow.
+            Employee.preferred_channel == Channel.SLACK,
+            Employee.channel_user_id.is_not(None),
+            func.length(func.trim(Employee.channel_user_id)) > 0,
         ).order_by(Employee.employee_id)
     ))
     capacities = employee_capacities(session, [item.employee_id for item in employees], shift.shift_id)

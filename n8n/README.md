@@ -10,14 +10,14 @@
 - Na cópia importada do template público, selecione novamente as credenciais Slack e Webhook Header Auth e o canal de demonstração. **Nunca ative o fluxo novo antes de completar as credenciais e usar uma URL válida de produção do n8n**.
 - Na Amanda: configure `N8N_DISPATCH_URL` para webhook **Production** do fluxo novo depois de ativá-lo, `N8N_DISPATCH_TOKEN` para a credencial correspondente do Webhook n8n, e `INTEGRATIONS_INTERNAL_TOKEN` para o HTTP Request de retorno. Reinicie o servidor. Use dados fictícios, roteamento seguro e túnel somente durante a demo.
 - Teste local (não consome créditos): `node --test n8n/tests/workflow-v2.test.mjs`. **Não executa chamadas de rede nem valida credenciais reais.**
-- O canal fixo `#novo-canal` é somente demo: não comprova roteamento individual nem autenticação da identidade do funcionário que clicou. Sem teste com API e n8n reais, V03–V17 não estão concluídas.
+- O canal fixo `#novo-canal` é somente demo: não comprova roteamento individual nem autenticação da identidade do funcionário que clicou. O fluxo Aceitar e o timeout já foram comprovados de ponta a ponta; recusa, DM e workflow auxiliar permanecem sem comprovação real.
 
 
-**Status atualizado (08/11/2026):** workflow V2 foi **importado e publicado** na instância n8n Cloud da equipe, com credenciais de Webhook, Slack e callback configuradas segundo a operação. **Ainda não há comprovação E2E** de oferta real do backend, clique no Slack e decisão persistida na API. Não substitua o fluxo já publicado. Os alertas operacionais V11/V13/V14 são um workflow **auxiliar opcional**, documentado em [OPERATIONS.md](OPERATIONS.md).
+**Status verificado (08/11/2026):** workflow V2 importado e publicado no n8n Cloud. O teste real comprovou cinco eventos `offer.dispatched`, um `offer.accepted` persistido e `offer.expired` com `plan.replanned` após correção de microssegundos no PR #23. **Não** foi comprovada reimportação independente por outro integrante, recusa real ou roteamento por DM individual. Consulte [REPRODUCAO_HACKATHON.md](REPRODUCAO_HACKATHON.md) para o handoff reproduzível. Alertas V11/V13/V14 são workflow **auxiliar**, ainda não publicado, em [OPERATIONS.md](OPERATIONS.md).
 
 ## Contratos verificáveis
 - Saída real do backend: 'offer.created' com os 14 campos listados em 'docs/payload-n8n.json' e 'app/services/dispatch.py::offer_payload'.
-- Entrada na API: POST /api/v1/integrations/attempt-events. O body JSON aceita **somente** 'event_id', 'event_type', 'attempt_id', 'channel', 'occurred_at' e 'reason'. 'event_type' é 'offer.accepted', 'offer.refused' ou 'offer.expired'; para este adaptador, apenas as duas primeiras opções.
+- Entrada na API: POST /api/v1/integrations/attempt-events. O body JSON aceita **somente** 'event_id', 'event_type', 'attempt_id', 'channel', 'occurred_at' e 'reason'. 'event_type' é 'offer.accepted', 'offer.refused' ou 'offer.expired'; a V2 cobre as três decisões. O timeout exige versão do backend que contém o PR #23.
 - Não enviar 'decision', 'responded_at', 'decline_reason', 'source', 'channel_user_id' ou 'case_id' como campos extras à API: o schema rejeita campos extras com HTTP 422.
 - Header obrigatório para o callback: 'X-Internal-Token', definido por credencial **HTTP Header Auth** do n8n, com o mesmo valor privado de 'INTEGRATIONS_INTERNAL_TOKEN' no backend.
 - **Não** reutilizar 'N8N_DISPATCH_TOKEN' como valor do callback por acaso: são direções e configurações distintas.
@@ -40,7 +40,7 @@
 - A resposta atual do n8n pode ter o campo 'event_id' de entrada. O adaptador gera ID **novo, determinístico** por tentativa/decisão, para não reutilizar o ID de 'offer.created'. Repetir mesmo evento deve conservar 'occurred_at' original; se mudar o timestamp, a API pode rejeitar como colisão 409 — situação segura, sem duplicar atribuição.
 - O backend recusa callback para tentativa inexistente, prazo passado, canal incompatível ou oferta nunca enviada. Não forjar IDs nos testes reais: obtenha IDs de caso/tentativa da própria API.
 - **V10/V11** (expiração/lembrete) e **V13/V14/V15/V17** exigem testes adicionais no workflow real; estes scripts não implementam esses requisitos por si.
-- Nenhum teste documentado aqui prova integração n8n real; o fluxo atual deve ser exportado/importado e executado para validar.
+- A execução real de Aceitar e do timeout foi comprovada em 08/11/2026; testes locais não substituem novos ensaios na instância n8n.
 
 ## Teste rápido SEM n8n
 Em projeto local que tenha Node.js 18+: 'node --test n8n/tests/normalizers.test.mjs'. Valida o Code node com entradas fictícias sem abrir n8n nem usar créditos.

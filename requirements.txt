@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+pytest
+httpx
+SQLAlchemy>=2.0,<3
+alembic>=1.13,<2

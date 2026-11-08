@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.engine import plan_coverage
+from app.engine import plan_coverage, replan_coverage
 from app.enums import ACTIVE_ATTEMPT_STATUSES, AttemptStatus, CaseStatus
 from app.errors import APIError
 from app.models import Case, CoverageAttempt, CoveragePlan, PolicyVersion
@@ -177,3 +177,87 @@ def plan_and_authorize(session: Session, case_id: str, *, actor: str) -> dict:
         return {"case_id": result["case_id"], "plan_id": result["plan_id"],
                 "plan_version": result["plan_version"],
                 "proposals": enriched, "uncovered": result["uncovered"]}
+
+
+def replan_failed_task(session_factory, failed_attempt_id: str, *, actor: str) -> dict:
+    """A15: recompute only the failed task; retain other active/accepted work.
+
+    A new attempt is saved under a new plan version. Previous refusal and
+    reservation release must already be committed by the event processor.
+    """
+    with session_factory() as session:
+        with session.begin():
+            if session.get_bind().dialect.name == "sqlite":
+                session.execute(text("BEGIN IMMEDIATE"))
+            failed = session.get(CoverageAttempt, failed_attempt_id)
+            if failed is None or failed.status not in {AttemptStatus.REFUSED, AttemptStatus.EXPIRED}:
+                raise APIError(409, "NO_FAILED_ATTEMPT", "Sem recusa/expiração a replanejar", {})
+            newer = session.scalar(select(CoverageAttempt).where(
+                CoverageAttempt.case_id == failed.case_id,
+                CoverageAttempt.task_id == failed.task_id,
+                CoverageAttempt.plan_version > failed.plan_version,
+            ).limit(1))
+            if newer is not None:
+                return {"status": "already_replanned", "attempt_id": newer.attempt_id}
+            case = session.get(Case, failed.case_id)
+            policy_version = session.scalar(select(PolicyVersion).order_by(
+                PolicyVersion.policy_version.desc()).limit(1))
+            if policy_version is None:
+                raise APIError(409, "POLICY_NOT_CONFIGURED", "Política ausente", {})
+            version = case.plan_version + 1
+            inputs = snapshot.build(session, case, policy=policy_version,
+                                    plan_version=version)
+            inputs["tasks"] = [task for task in inputs["tasks"]
+                               if task["task_id"] == failed.task_id]
+            inputs["exclusions"] = [entry for entry in inputs["exclusions"]
+                                    if entry["task_id"] == failed.task_id]
+            if len(inputs["tasks"]) != 1:
+                raise APIError(409, "TASK_NO_LONGER_AFFECTED", "Tarefa ausente no caso", {})
+            result = replan_coverage(inputs)
+            _validate_engine_result(result, inputs)
+            now = max(datetime.now(UTC), failed.created_at, case.created_at)
+            plan = CoveragePlan(plan_id=f"plan-{uuid4()}", case_id=case.case_id,
+                                plan_version=version,
+                                policy_version=policy_version.policy_version,
+                                created_at=now)
+            session.add(plan)
+            case.plan_version = version
+            session.flush()
+            if result["assignments"]:
+                candidate_id = result["assignments"][0]["candidate_employee_id"]
+                reason = result["assignments"][0]["reason"]
+                status = AttemptStatus.PROPOSED
+            else:
+                candidate_id = None
+                reason = result["uncovered"][0]["reason_code"]
+                status = AttemptStatus.ESCALATED
+            next_attempt = CoverageAttempt(
+                attempt_id=f"att-{uuid4()}", case_id=case.case_id,
+                plan_id=plan.plan_id, plan_version=version,
+                policy_version=policy_version.policy_version,
+                task_id=failed.task_id, candidate_employee_id=candidate_id,
+                status=status, reason=reason, created_at=now,
+            )
+            session.add(next_attempt)
+            session.flush()
+            if status == AttemptStatus.PROPOSED:
+                try:
+                    reservations.reserve_locked(session, next_attempt, actor=actor, at=now)
+                except APIError as exc:
+                    if exc.code != "BP_APPROVAL_REQUIRED":
+                        raise
+                    next_attempt.status = AttemptStatus.PENDING_APPROVAL
+                else:
+                    dispatch.queue_offer(session, next_attempt, actor=actor, at=now)
+            audit.record(session, case_id=case.case_id,
+                         attempt_id=next_attempt.attempt_id, actor=actor,
+                         action="plan.replanned", timestamp=now,
+                         policy_version=policy_version.policy_version,
+                         result={"failed_attempt_id": failed_attempt_id,
+                                 "status": next_attempt.status.value,
+                                 "reason": reason})
+            cases.recalculate_case_status(session, case, actor=actor,
+                                          reason="Replanejamento após resposta negativa", at=now)
+            return {"status": next_attempt.status.value,
+                    "attempt_id": next_attempt.attempt_id,
+                    "case_id": case.case_id, "plan_version": version}

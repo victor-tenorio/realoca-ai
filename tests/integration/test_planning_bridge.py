@@ -412,6 +412,32 @@ def test_bp_approval_endpoint_uses_contract_body(scenario, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_case_queries_expose_real_pending_bp_queue(scenario):
+    from app.db import get_session
+    from app.main import app
+
+    session, case, tasks, created = scenario
+    attempt_id, _ = _pending_bp(scenario)
+
+    def override():
+        with Session(session.get_bind()) as request_session:
+            yield request_session
+
+    app.dependency_overrides[get_session] = override
+    try:
+        with TestClient(app) as client:
+            summary = client.get("/api/v1/cases")
+            detail = client.get(f"/api/v1/cases/{case.case_id}")
+            missing = client.get("/api/v1/cases/missing")
+        assert summary.status_code == 200
+        assert summary.json()["cases"][0]["pending_approval_count"] == 1
+        assert detail.status_code == 200
+        assert detail.json()["pending_approvals"] == [attempt_id]
+        assert missing.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_post_plan_http_classifies_reserves_and_prepares_outbox(scenario, monkeypatch):
     from app.db import get_session
     from app.main import app

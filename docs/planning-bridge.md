@@ -33,12 +33,28 @@ nova tentativa; o envio pode ser retomado por
 `python -m app.services.dispatch` no ambiente do backend. O `event_id` é
 preservado entre tentativas. **Não publicar esses segredos no repositório.**
 
+**Callbacks A14–A15:** `POST /api/v1/integrations/attempt-events` confirma o
+recebimento de maneira idempotente e agenda o processamento da inbox. Um
+`offer.accepted` revalida competências, presença, autorização BP e capacidade
+(descontando apenas a própria reserva) e, em uma transação, libera a reserva,
+registra `TaskAssignment`, muda o proprietário na fonte de tarefas e audita.
+Uma recusa ou expiração libera a reserva e grava o motivo antes de solicitar
+um novo plano ao motor para **somente a tarefa recusada**, excluindo candidatos
+que já recusaram/expiraram. Se não houver candidato, registra tentativa
+`escalated` e lacuna, sem inventar cobertura. Eventos inválidos ficam
+registrados como rejeitados; falhas transitórias de processamento permanecem
+na inbox para recuperação por `python -m app.services.event_processing`.
+
+**Consultas BP:** `GET /api/v1/cases` lista casos e contagem de aprovações;
+`GET /api/v1/cases/{case_id}` mostra tentativas, motivos e pendências reais.
+
 **Limites atuais:** o motor do Mateus permanece heurístico. O outbox foi
 testado com um webhook simulado, não foi executado contra n8n real; é preciso
-conectar a URL ao fluxo de Victor antes do teste ponta a ponta. A API já
-recebe callbacks na inbox, mas **a aplicação de aceite, recusa e expiração
-ao estado de tarefas/reservas ainda depende das etapas A14–A15**. A etapa
-`offer.created` não confirma aceite nem muda o responsável.
+conectar a URL ao fluxo de Victor antes do teste ponta a ponta. O envio pode
+falhar depois de gravar a intenção e ser retomado pelo worker, sem criar um
+novo `event_id`. A etapa `offer.created` não confirma aceite nem muda o
+responsável. As falhas de replanejamento também podem ser retomadas pelo
+worker; o último callback recebido não é descartado.
 
 **Validação:** `python -m pytest -q`, com testes de banco → motor → reserva,
 aprovação/rejeição BP e simulação de envio, falha e reenvio do outbox.

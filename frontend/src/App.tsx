@@ -3,15 +3,19 @@ import type { FormEvent } from "react";
 import { api, errorMessage } from "./api";
 import { useResource } from "./hooks/use-resource";
 import type { Resource } from "./hooks/use-resource";
+import { initialSlackDemoState, respondToSlackProposal, slackScenarios } from "./slack-demo";
+import type { SlackScenarioId } from "./slack-demo";
+import { presentStatus } from "./status-presentation";
 import type { AbsenceCreated, Employee, Task, Team } from "./types";
 
-type Page = "overview" | "cases" | "tasks" | "teams" | "approvals" | "audit";
+type Page = "overview" | "cases" | "tasks" | "teams" | "slack" | "approvals" | "audit";
 
 const navigation: { id: Page; label: string; icon: string }[] = [
   { id: "overview", label: "Visão Geral", icon: "◫" },
   { id: "cases", label: "Casos de Ausência", icon: "◷" },
   { id: "tasks", label: "Tarefas", icon: "▤" },
   { id: "teams", label: "Equipes e Capacidade", icon: "⌘" },
+  { id: "slack", label: "Simulador Slack", icon: "✉" },
   { id: "approvals", label: "Aprovações", icon: "✓" },
   { id: "audit", label: "Auditoria", icon: "◷" },
 ];
@@ -21,6 +25,7 @@ const pageTitles: Record<Page, { title: string; subtitle: string }> = {
   cases: { title: "Casos de ausência", subtitle: "Registre ausências confirmadas e acompanhe o retorno real da API." },
   tasks: { title: "Tarefas", subtitle: "Consulte tarefas do turno e filtre os dados publicados pelo backend." },
   teams: { title: "Equipes e capacidade", subtitle: "Capacidade e carga calculadas pelo backend para o turno de referência." },
+  slack: { title: "Simulador Slack", subtitle: "Demonstração local e fictícia de respostas a propostas; não envia mensagens." },
   approvals: { title: "Aprovações", subtitle: "A fila será exibida quando a API disponibilizar a consulta oficial." },
   audit: { title: "Auditoria", subtitle: "Histórico operacional somente para leitura." },
 };
@@ -94,6 +99,7 @@ export default function App() {
           {page === "cases" && <CasesPage employees={employees} />}
           {page === "tasks" && <TasksPage resource={tasks} onRetry={() => setRefreshKey((key) => key + 1)} />}
           {page === "teams" && <TeamsPage resource={teams} onRetry={() => setRefreshKey((key) => key + 1)} />}
+          {page === "slack" && <SlackSimulator />}
           {page === "approvals" && <UnavailablePage kind="approvals" />}
           {page === "audit" && <UnavailablePage kind="audit" />}
         </div>
@@ -108,7 +114,9 @@ function Overview({ employees, tasks, teams, onRetry }: {
   teams: Resource<Team[]>;
   onRetry: () => void;
 }) {
-  const activeTasks = tasks.status === "success" ? tasks.data.filter((task) => task.status !== "done") : [];
+  const activeTasks = tasks.status === "success"
+    ? tasks.data.filter((task) => task.status === "open" || task.status === "in_progress")
+    : [];
   const openHours = activeTasks.reduce((total, task) => total + task.estimated_hours, 0);
   const criticalTasks = activeTasks.filter((task) => task.priority === "critical").slice(0, 4);
   const priorities = (["critical", "high", "medium", "low"] as const).map((priority) => ({
@@ -123,8 +131,8 @@ function Overview({ employees, tasks, teams, onRetry }: {
         <ErrorBanner message="Alguns dados não puderam ser carregados." onRetry={onRetry} />
       )}
       <div className="metrics-grid">
-        <MetricCard label="Tarefas em andamento" value={resourceCount(tasks, (items) => items.filter((task) => task.status !== "done").length)} detail="Tarefas abertas ou em execução" icon="▤" tone="green" />
-        <MetricCard label="Horas nas tarefas abertas" value={tasks.status === "success" ? formatHours(openHours) : "—"} detail="Estimativas publicadas pela API" icon="◷" tone="blue" />
+        <MetricCard label="Tarefas ativas" value={resourceCount(tasks, (items) => items.filter((task) => task.status === "open" || task.status === "in_progress").length)} detail="Open e in_progress; concluídas excluídas" icon="▤" tone="green" />
+        <MetricCard label="Horas de demanda ativa" value={tasks.status === "success" ? formatHours(openHours) : "—"} detail="Soma das estimativas de tarefas ativas" icon="◷" tone="blue" />
         <MetricCard label="Funcionários publicados" value={resourceCount(employees, (items) => items.length)} detail="Pessoas disponíveis na consulta" icon="♙" tone="violet" />
         <MetricCard label="Equipes com capacidade completa" value={teams.status === "success" ? teams.data.filter((team) => team.complete).length + " / " + teams.data.length : "—"} detail="Agregados completos no turno atual" icon="⌘" tone="amber" />
       </div>
@@ -166,12 +174,122 @@ function Overview({ employees, tasks, teams, onRetry }: {
         </section>
       </div>
 
+      <StatusGuide />
+
       <div className="notice notice-neutral">
         <span className="notice-icon" aria-hidden="true">i</span>
         <p><strong>Indicadores de cobertura indisponíveis.</strong> A API atual ainda não expõe consultas de casos, planejamento, reservas por tentativa ou aprovações. Propostas não são apresentadas como cobertura confirmada.</p>
       </div>
     </section>
   );
+}
+
+function SlackSimulator() {
+  const [scenarioId, setScenarioId] = useState<SlackScenarioId>("accept");
+  const scenario = slackScenarios.find((item) => item.id === scenarioId)!;
+  const [state, setState] = useState(() => initialSlackDemoState(scenario));
+  const currentAttempt = state.attempts[state.attempts.length - 1];
+  const currentCandidate = currentAttempt
+    ? scenario.candidates.find((candidate) => candidate.employeeId === currentAttempt.employeeId)
+    : undefined;
+  const canRespond = state.outcome === "awaiting-response" && currentAttempt?.status === "notified";
+
+  function changeScenario(value: SlackScenarioId) {
+    const nextScenario = slackScenarios.find((item) => item.id === value)!;
+    setScenarioId(value);
+    setState(initialSlackDemoState(nextScenario));
+  }
+
+  return (
+    <section className="stack slack-simulator" aria-label="Simulador Slack local">
+      <div className="notice notice-demo" role="note">
+        <span className="notice-icon" aria-hidden="true">!</span>
+        <p><strong>SIMULAÇÃO LOCAL · DADOS FICTÍCIOS.</strong> Nenhuma mensagem sai pelo Slack/n8n e nenhuma resposta é enviada à API. Aceites, recusas e propostas deste painel existem somente no estado desta página; não criam reserva, atribuição nem cobertura confirmada.</p>
+      </div>
+
+      <div className="panel simulator-toolbar">
+        <label htmlFor="slack-scenario">Cenário
+          <select id="slack-scenario" value={scenarioId} onChange={(event) => changeScenario(event.target.value as SlackScenarioId)}>
+            {slackScenarios.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+          </select>
+        </label>
+        <button className="button button-secondary" type="button" onClick={() => setState(initialSlackDemoState(scenario))}>Reiniciar cenário</button>
+      </div>
+
+      <div className="slack-layout">
+        <section className="panel slack-conversation" aria-labelledby="conversation-heading">
+          <div className="slack-window-heading">
+            <div className="slack-logo" aria-hidden="true">#</div>
+            <div><h2 id="conversation-heading">Canal fictício · cobertura-operacional</h2><p>Conversa simulada, sem conexão com workspace real</p></div>
+            <span className="simulation-tag">SIMULADO</span>
+          </div>
+
+          <article className="slack-offer" aria-label="Proposta simulada">
+            <div className="offer-topline"><span>Proposta de cobertura · {scenario.task.taskId}</span><StatusPill value={currentAttempt?.status ?? "proposed"} entity="attempt" /></div>
+            <h3>{scenario.task.title}</h3>
+            <div className="offer-facts">
+              <span><small>Destinatário</small><strong>{currentCandidate?.name ?? "Nenhum candidato"}</strong></span>
+              <span><small>Prioridade</small><strong>{priorityLabel(scenario.task.priority)}</strong></span>
+              <span><small>Estimativa</small><strong>{formatHours(scenario.task.estimatedHours)}</strong></span>
+              <span><small>Equipe da tarefa</small><strong>{scenario.task.team}</strong></span>
+            </div>
+            <p className="offer-reason"><strong>Justificativa:</strong> {scenario.task.reason}</p>
+            <p className="offer-skills"><strong>Competências:</strong> {scenario.task.requiredSkills.join(", ")}</p>
+            {currentCandidate && <p className="offer-skills"><strong>Capacidade fictícia:</strong> {formatHours(currentCandidate.availableHours)} · {currentCandidate.team}</p>}
+          </article>
+
+          <div className="chat-history" aria-label="Histórico das interações">
+            {state.events.map((event, index) => (
+              <div className={`chat-event ${event.actor}`} key={`${index}-${event.actor}`}>
+                <span className="chat-avatar" aria-hidden="true">{event.actor === "employee" ? "RH" : event.actor === "system" ? "AI" : "#"}</span>
+                <p><strong>{event.actor === "employee" ? event.employeeName ?? "Funcionário" : event.actor === "system" ? "Realoca AI · simulação" : "Slack · mensagem fictícia"}</strong><span>{event.text}</span></p>
+              </div>
+            ))}
+          </div>
+
+          {canRespond && <div className="response-actions" aria-label="Resposta fictícia do funcionário">
+            <button className="button button-primary" type="button" onClick={() => setState((current) => respondToSlackProposal(scenario, current, "accept"))}>Aceitar · simulação</button>
+            <button className="button button-danger" type="button" onClick={() => setState((current) => respondToSlackProposal(scenario, current, "refuse"))}>Recusar · simulação</button>
+          </div>}
+        </section>
+
+        <aside className="panel attempt-history" aria-labelledby="attempt-history-heading">
+          <div className="panel-heading"><div><h2 id="attempt-history-heading">Histórico de propostas</h2><p>Estados locais do cenário, não persistidos.</p></div></div>
+          {state.attempts.length === 0 ? <EmptyState title="Nenhuma proposta simulada" description="Este cenário não possui candidatos fictícios predefinidos." /> :
+            <ol className="attempt-list">{state.attempts.map((attempt, index) => {
+              const candidate = scenario.candidates.find((item) => item.employeeId === attempt.employeeId);
+              return <li key={`${attempt.employeeId}-${index}`}>
+                <span className="attempt-number">{index + 1}</span>
+                <div><strong>{candidate?.name ?? attempt.employeeId}</strong><small>{attempt.employeeId}</small><StatusPill value={attempt.status} entity="attempt" /></div>
+              </li>;
+            })}</ol>}
+          {state.outcome === "accepted" && <div className="simulator-outcome positive" role="status"><strong>Aceite fictício registrado</strong><span>A resposta não foi persistida. A cobertura do caso continua desconhecida.</span></div>}
+          {state.outcome === "replanning-required" && <div className="simulator-outcome pending" role="status"><strong>Replanejamento necessário</strong><span>A recusa não escolheu outro candidato; este cenário não chamou o motor nem consultou a API.</span></div>}
+          {state.attempts.length > 1 && <div className="simulator-outcome pending" role="status"><strong>Nova proposta fictícia</strong><span>O candidato recusante não foi reutilizado para esta tarefa. A nova proposta aguarda resposta.</span></div>}
+          {state.outcome === "uncovered" && <div className="simulator-outcome attention" role="status"><strong>Tarefa sem cobertura no cenário</strong><span>Não há outro candidato fictício elegível predefinido. É necessário escalonamento; nenhuma cobertura foi inventada.</span></div>}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function StatusGuide() {
+  const groups = [
+    { title: "Tarefa", entity: "task" as const, values: ["open", "in_progress", "done"] },
+    { title: "Caso", entity: "case" as const, values: ["open", "planning", "pending_approval", "awaiting_responses", "coverage_confirmed", "closed_with_gaps", "completed"] },
+    { title: "Proposta", entity: "attempt" as const, values: ["proposed", "pending_approval", "reserved", "notified", "accepted", "refused", "expired", "rejected_by_bp", "escalated"] },
+  ];
+
+  return <section className="panel status-guide" aria-labelledby="status-guide-heading">
+    <div className="panel-heading"><div><h2 id="status-guide-heading">Estados não são equivalentes</h2><p>Glossário do contrato; não representa uma consulta de casos ou propostas.</p></div></div>
+    <div className="status-guide-groups">{groups.map((group) => <div className="status-guide-group" key={group.title}>
+      <h3>{group.title}</h3>
+      {group.values.map((value) => {
+        const status = presentStatus(group.entity, value);
+        return <div className="status-definition" key={value}><StatusPill value={value} entity={group.entity} /><span>{status.description}</span></div>;
+      })}
+    </div>)}</div>
+  </section>;
 }
 
 function MetricCard({ label, value, detail, icon, tone }: {
@@ -267,7 +385,7 @@ function CasesPage({ employees }: { employees: Resource<Employee[]> }) {
           <div className="success-result" role="status">
             <strong>Resposta confirmada pela API</strong>
             <span>Ausência: <code>{result.absence_id}</code></span>
-            <span>Caso: <code>{result.case_id}</code> · Status: <StatusPill value={result.status} /></span>
+            <span>Caso: <code>{result.case_id}</code> · Status: <StatusPill value={result.status} entity="case" /></span>
             <small>O caso foi criado; isso não significa que as tarefas já tenham cobertura confirmada.</small>
           </div>
         )}
@@ -317,7 +435,7 @@ function TasksPage({ resource, onRetry }: { resource: Resource<Task[]>; onRetry:
                 <tbody>{filtered.map((task) => <tr key={task.task_id}>
                   <td><strong>{task.title}</strong><small>{task.task_id}</small></td>
                   <td><PriorityPill value={task.priority} /></td>
-                  <td><StatusPill value={task.status} /></td>
+                  <td><StatusPill value={task.status} entity="task" /></td>
                   <td>{task.assignee_employee_id}</td><td>{task.team_id}</td>
                   <td>{formatHours(task.estimated_hours)}</td><td>{formatDate(task.due_at)}</td>
                   <td><div className="skill-list">{task.required_skills.map((skill) => <span key={skill}>{skill}</span>)}</div></td>
@@ -391,8 +509,9 @@ function PriorityPill({ value }: { value: string }) {
   return <span className={"priority-pill " + priorityClass(value)}>{priorityLabel(value)}</span>;
 }
 
-function StatusPill({ value }: { value: string }) {
-  return <span className={"status-pill " + statusClass(value)}>{statusLabel(value)}</span>;
+function StatusPill({ value, entity }: { value: string; entity: "task" | "case" | "attempt" }) {
+  const status = presentStatus(entity, value);
+  return <span className={"status-pill " + status.tone} title={status.description} data-entity={entity} data-status={value}>{status.label}</span>;
 }
 
 function LoadingState({ label }: { label: string }) {
@@ -451,23 +570,4 @@ function priorityLabel(value: string): string {
 
 function priorityClass(value: string): string {
   return ["critical", "high", "medium", "low"].includes(value) ? value : "unknown";
-}
-
-function statusLabel(value: string): string {
-  const labels: Record<string, string> = {
-    open: "Aberta", in_progress: "Em andamento", done: "Concluída",
-    pending_approval: "Aguardando aprovação", awaiting_responses: "Aguardando resposta",
-    coverage_confirmed: "Cobertura confirmada", closed_with_gaps: "Encerrado com lacunas",
-    completed: "Concluído", planning: "Em planejamento", proposed: "Proposta",
-    reserved: "Reservada", notified: "Notificada", accepted: "Aceita", refused: "Recusada",
-    expired: "Expirada", rejected_by_bp: "Rejeitada pelo BP", escalated: "Escalonada",
-  };
-  return labels[value] || "Desconhecido";
-}
-
-function statusClass(value: string): string {
-  if (["accepted", "coverage_confirmed", "done", "completed"].includes(value)) return "positive";
-  if (["pending_approval", "awaiting_responses", "proposed", "reserved", "notified"].includes(value)) return "pending";
-  if (["refused", "expired", "rejected_by_bp", "escalated", "closed_with_gaps"].includes(value)) return "attention";
-  return "neutral";
 }

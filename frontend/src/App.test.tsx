@@ -50,10 +50,58 @@ describe("Realoca AI frontend", () => {
 
   it("shows API-derived dashboard indicators and identifies unavailable coverage metrics", async () => {
     render(<App />);
-    const cardLabel = await screen.findByText("Tarefas em andamento");
+    const cardLabel = await screen.findByText("Tarefas ativas");
     expect(within(cardLabel.parentElement!).getByText("1")).toBeTruthy();
     expect(screen.getByText(/Indicadores de cobertura indisponíveis/)).toBeTruthy();
     expect(screen.getByText(/não expõe consultas de casos/)).toBeTruthy();
+  });
+
+  it("counts only active task demand and retains a real zero separately from unknown", async () => {
+    mockApi({ tasks: [task(), task({ task_id: "task-002", title: "Encerrada", status: "done", estimated_hours: 8 })] });
+    render(<App />);
+    const activeCount = await screen.findByText("Tarefas ativas");
+    expect(within(activeCount.parentElement!).getByText("1")).toBeTruthy();
+    const activeHours = screen.getByText("Horas de demanda ativa");
+    expect(within(activeHours.parentElement!).getByText("2h")).toBeTruthy();
+    expect(screen.getByText("Estados não são equivalentes")).toBeTruthy();
+  });
+
+  it("keeps dashboard metrics unknown after a 503 instead of replacing them with zero", async () => {
+    vi.mocked(api.listTasks).mockRejectedValue(new ApiError("Consulta indisponível", 503, "DATABASE_UNAVAILABLE"));
+    render(<App />);
+    await screen.findByText("Alguns dados não puderam ser carregados.");
+    const activeCount = screen.getByText("Tarefas ativas");
+    expect(within(activeCount.parentElement!).getByText("—")).toBeTruthy();
+    const activeHours = screen.getByText("Horas de demanda ativa");
+    expect(within(activeHours.parentElement!).getByText("—")).toBeTruthy();
+  });
+
+  it("runs Slack accept and refusal flows only in local demo state", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /Simulador Slack/ }));
+    expect(await screen.findByText(/SIMULAÇÃO LOCAL · DADOS FICTÍCIOS/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Aceitar · simulação" }));
+    expect(await screen.findByText("Aceite fictício registrado")).toBeTruthy();
+    expect(screen.getByText(/A cobertura do caso continua desconhecida/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Reiniciar cenário" }));
+    fireEvent.change(screen.getByLabelText("Cenário"), { target: { value: "refuse" } });
+    fireEvent.click(screen.getByRole("button", { name: "Recusar · simulação" }));
+    expect(await screen.findByText("Replanejamento necessário")).toBeTruthy();
+    expect(api.createAbsence).not.toHaveBeenCalled();
+  });
+
+  it("shows the next fixture candidate after a refusal and the gap when none remains", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /Simulador Slack/ }));
+    fireEvent.change(screen.getByLabelText("Cenário"), { target: { value: "replan" } });
+    fireEvent.click(screen.getByRole("button", { name: "Recusar · simulação" }));
+    expect(await screen.findByText("Novo candidato fictício proposto: Beatriz Melo. O candidato recusante foi excluído desta tarefa.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Recusar · simulação" }));
+    expect(await screen.findByText("Tarefa sem cobertura no cenário")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Cenário"), { target: { value: "no-substitute" } });
+    fireEvent.click(screen.getByRole("button", { name: "Recusar · simulação" }));
+    expect(await screen.findByText("Tarefa sem cobertura no cenário")).toBeTruthy();
+    expect(api.createAbsence).not.toHaveBeenCalled();
   });
 
   it("navigates between operational pages", async () => {

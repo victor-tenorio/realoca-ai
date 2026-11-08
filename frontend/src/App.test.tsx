@@ -13,6 +13,12 @@ vi.mock("./api", async (importOriginal) => {
       listTasks: vi.fn(),
       listTeams: vi.fn(),
       createAbsence: vi.fn(),
+      listCases: vi.fn(),
+      getCase: vi.fn(),
+      planCase: vi.fn(),
+      getDashboard: vi.fn(),
+      getAudit: vi.fn(),
+      decideApproval: vi.fn(),
     },
   };
 });
@@ -43,17 +49,31 @@ function mockApi(data: { employees?: Employee[]; tasks?: Task[]; teams?: Team[] 
   vi.mocked(api.createAbsence).mockResolvedValue({
     absence_id: "abs-001", case_id: "case-001", status: "open",
   });
+  vi.mocked(api.listCases).mockResolvedValue({ cases: [], total: 0 });
+  vi.mocked(api.getCase).mockResolvedValue({
+    case_id: "case-001", status: "open", plan_version: 0, created_at: "2026-11-08T10:00:00Z",
+    absences: [], tasks: [], proposals: [], pending_approvals: [], escalations: [],
+  });
+  vi.mocked(api.planCase).mockResolvedValue({});
+  vi.mocked(api.getDashboard).mockResolvedValue({
+    confirmed_absences: 0, cases_total: 0, cases_open: 0, affected_tasks: 0,
+    affected_hours: 0, planned_hours: 0, confirmed_hours: 0, completed_hours: 0,
+    completed_tasks: 0, in_progress_tasks: 0, without_confirmed_coverage: 0,
+    affected_teams: 0, refusals: 0, expirations: 0, escalations: 0, pending_bp: 0,
+  });
+  vi.mocked(api.getAudit).mockResolvedValue({ events: [], total: 0 });
+  vi.mocked(api.decideApproval).mockResolvedValue({ status: "approved" });
 }
 
 describe("Realoca AI frontend", () => {
   beforeEach(() => mockApi());
 
-  it("shows API-derived dashboard indicators and identifies unavailable coverage metrics", async () => {
+  it("shows API-derived dashboard indicators and real coverage metrics", async () => {
     render(<App />);
     const cardLabel = await screen.findByText("Tarefas ativas");
     expect(within(cardLabel.parentElement!).getByText("1")).toBeTruthy();
-    expect(screen.getByText(/Indicadores de cobertura indisponíveis/)).toBeTruthy();
-    expect(screen.getByText(/não expõe consultas de casos/)).toBeTruthy();
+    expect(await screen.findByText("Cobertura real dos casos")).toBeTruthy();
+    expect(screen.getByText("Horas confirmadas")).toBeTruthy();
   });
 
   it("counts only active task demand and retains a real zero separately from unknown", async () => {
@@ -152,14 +172,14 @@ describe("Realoca AI frontend", () => {
     expect(await screen.findByText("Nenhuma tarefa publicada")).toBeTruthy();
   });
 
-  it("keeps approval and audit pages read-only when their routes are absent", async () => {
+  it("shows real BP queue and immutable audit instead of unsupported API warnings", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: /Aprovações/ }));
-    expect(await screen.findByText("Consulta de aprovações não implementada")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Aprovar" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Rejeitar" })).toBeNull();
+    expect(await screen.findByText("Aprovações do BP")).toBeTruthy();
+    expect(await screen.findByText("Nenhuma proposta aguardando decisão BP.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Auditoria/ }));
-    expect(await screen.findByText("Consulta de auditoria não implementada")).toBeTruthy();
+    expect(await screen.findByText("Trilha auditável real")).toBeTruthy();
+    expect(await screen.findByText("Nenhum evento encontrado para este filtro.")).toBeTruthy();
   });
 
   it("reports backend connection errors and offers retry", async () => {

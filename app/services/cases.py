@@ -11,7 +11,7 @@ from app.errors import APIError
 from app.models import Absence, Case, Employee
 from app.models.workflow import case_absences
 from app.schemas.absences import AbsenceCreate, AbsenceCreated
-from app.services import audit, impact, task_source
+from app.services import audit, impact
 
 
 def existing_case(session: Session, absence_id: str) -> Case | None:
@@ -102,9 +102,6 @@ def register_confirmed_absence(
                 409, "ABSENCE_OVERLAP", "Ausência sobreposta já registrada", details
             )
         now = datetime.now(UTC)
-        tasks = task_source.open_tasks_for_absence(
-            session, payload.employee_id, starts_at, ends_at
-        )
         absence = Absence(
             absence_id=f"abs-{uuid4()}",
             employee_id=payload.employee_id,
@@ -115,6 +112,8 @@ def register_confirmed_absence(
             external_id=payload.external_id,
             updated_at=now,
         )
+        analysis = impact.prepare_analysis(session, absence)
+        tasks = analysis.records
         case = Case(
             case_id=f"case-{uuid4()}",
             status=CaseStatus.OPEN,
@@ -148,17 +147,7 @@ def register_confirmed_absence(
             timestamp=now,
             result={"status": "open", "task_count": len(tasks)},
         )
-        audit.record(
-            session,
-            case_id=case.case_id,
-            actor=actor,
-            action="impact.detected" if tasks else "impact.no_registered_tasks",
-            timestamp=now,
-            result={
-                "absence_id": absence.absence_id,
-                **impact.absence_impact(payload.employee_id, tasks),
-            },
-        )
+        impact.record_analysis(session, case, absence, analysis, now)
         session.flush()
         response = registration_response(absence, case)
     return response, 201

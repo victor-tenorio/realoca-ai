@@ -289,6 +289,111 @@ def test_policy_defaults_are_used_without_mutating_input(snapshot):
     assert snapshot == before
 
 
+def _one_candidate_snapshot(snapshot, *, shift_hours, committed_hours, reserved_hours, task_hours):
+    snapshot["tasks"] = [deepcopy(snapshot["tasks"][0])]
+    snapshot["tasks"][0]["estimated_hours"] = task_hours
+    snapshot["employees"] = [deepcopy(snapshot["employees"][0])]
+    snapshot["employees"][0].update(
+        shift_hours=shift_hours,
+        committed_hours=committed_hours,
+        reserved_hours=reserved_hours,
+    )
+    snapshot["absent_employee_ids"] = []
+    return snapshot
+
+
+def test_capacity_uses_ninety_percent_utilization(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=8, committed_hours=2, reserved_hours=1.2, task_hours=4
+    )
+    snapshot["policies"]["max_utilization_pct"] = 90
+    result = plan_coverage(snapshot)
+    assert len(result["assignments"]) == 1
+    assert result["metrics"]["planned_hours"] == 4
+
+
+def test_committed_and_reserved_hours_are_each_subtracted_once(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=10, committed_hours=2, reserved_hours=1, task_hours=6
+    )
+    snapshot["policies"]["max_utilization_pct"] = 90
+    result = plan_coverage(snapshot)
+    assert len(result["assignments"]) == 1
+    assert result["metrics"]["planned_hours"] == 6
+
+
+def test_employee_at_capacity_has_zero_available_hours(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=8, committed_hours=7.2, reserved_hours=0, task_hours=0.1
+    )
+    snapshot["policies"]["max_utilization_pct"] = 90
+    result = plan_coverage(snapshot)
+    assert result["assignments"] == []
+    assert result["uncovered"][0]["reason_code"] == "INSUFFICIENT_CAPACITY"
+
+
+def test_existing_load_above_limit_still_has_zero_available_capacity(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=8, committed_hours=8, reserved_hours=1, task_hours=0.1
+    )
+    snapshot["policies"]["max_utilization_pct"] = 90
+    result = plan_coverage(snapshot)
+    assert result["assignments"] == []
+    assert result["uncovered"][0]["reason_code"] == "INSUFFICIENT_CAPACITY"
+
+
+def test_multiple_tasks_cannot_overconsume_candidate_capacity(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=4, committed_hours=0, reserved_hours=0, task_hours=3
+    )
+    snapshot["tasks"].append(deepcopy(snapshot["tasks"][0]))
+    snapshot["tasks"][1]["task_id"] = "task-C"
+    snapshot["policies"]["max_utilization_pct"] = 100
+    result = plan_coverage(snapshot)
+    assert [item["task_id"] for item in result["assignments"]] == ["task-A"]
+    assert result["uncovered"] == [
+        {"task_id": "task-C", "reason_code": "INSUFFICIENT_CAPACITY", "alternatives": []}
+    ]
+    assert result["metrics"]["planned_hours"] == 3
+
+
+def test_task_equal_to_remaining_capacity_is_eligible(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=10, committed_hours=0, reserved_hours=0, task_hours=9
+    )
+    snapshot["policies"]["max_utilization_pct"] = 90
+    result = plan_coverage(snapshot)
+    assert len(result["assignments"]) == 1
+    assert result["uncovered"] == []
+
+
+def test_replanning_uses_updated_reservations_without_mutating_snapshot(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=10, committed_hours=0, reserved_hours=0, task_hours=2
+    )
+    snapshot["policies"]["max_utilization_pct"] = 100
+    first_plan = plan_coverage(snapshot)
+    assert len(first_plan["assignments"]) == 1
+
+    replanning_snapshot = deepcopy(snapshot)
+    replanning_snapshot["employees"][0]["reserved_hours"] = 8.5
+    before = deepcopy(replanning_snapshot)
+    replanned = replan_coverage(replanning_snapshot)
+    assert replanned["assignments"] == []
+    assert replanned["uncovered"][0]["reason_code"] == "INSUFFICIENT_CAPACITY"
+    assert replanning_snapshot == before
+
+
+def test_extreme_finite_capacities_do_not_overflow(snapshot):
+    _one_candidate_snapshot(
+        snapshot, shift_hours=1e308, committed_hours=1e308, reserved_hours=0, task_hours=1
+    )
+    snapshot["policies"]["max_utilization_pct"] = 100
+    result = plan_coverage(snapshot)
+    assert result["assignments"] == []
+    assert result["metrics"]["demand_hours"] == 1
+
+
 def test_planning_is_deterministic(snapshot):
     assert plan_coverage(snapshot) == plan_coverage(snapshot)
     assert replan_coverage(snapshot) == plan_coverage(snapshot)

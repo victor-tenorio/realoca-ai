@@ -434,3 +434,102 @@ O registro não altera responsáveis, estimativas, status das tarefas, carga,
 reservas ou histórico de atribuições. Não chama o motor, não seleciona
 substitutos, não cria propostas e não envia mensagens. Reenvios e conflitos não
 geram novamente eventos de criação.
+
+## Agente de impacto: tarefas e divergências
+
+A seleção de tarefas, os vínculos e os três eventos da criação de ausência já
+existiam. Esta atividade centraliza a análise completa em `services/impact.py`,
+reutilizando esses registros; não acrescenta rotas ou campos ao JSON público.
+
+### Seleção e resultados internos
+
+Toda consulta a tarefas da análise passa por `services/task_source.py`:
+`open_tasks_for_absence` seleciona as tarefas atuais e `tasks_by_ids` lê o estado
+real das tarefas históricas, inclusive concluídas ou com outro responsável.
+Relacionamentos de competências e responsável são carregados em lote. A seleção
+continua por `employee_id`, estados `open`/`in_progress`, turno de
+`DEMO_REFERENCE_DATE` e interseção semiaberta entre turno e ausência. `due_at`
+continua sendo prazo, não prova de execução. Não se inventam tarefas, horas ou
+intervalos de execução; não foi necessária nova regra temporal.
+
+`prepare_analysis` exige ausência confirmada e produz `ImpactAnalysis` com:
+
+- Tarefas atuais, quantidade, prioridades, requisitos de competências, origem,
+  equipe de origem, responsável e equipe atual do responsável, em campos distintos.
+- `known_hours_at_risk` e `hours_at_risk` como Decimal para os próximos serviços.
+  O primeiro soma somente estimativas conhecidas; o segundo é None se houver
+  qualquer estimativa desconhecida. `estimates_complete` descreve essa condição.
+  Soma vazia é zero conhecido **do conjunto cadastrado**, não prova de inexistência
+  de trabalho; todas as estimativas desconhecidas resultam em soma conhecida zero
+  e total desconhecido. Não se estima esforço faltante nem se arredondam cálculos.
+- `data_quality_issues` lista os campos desconhecidos por tarefa, separadamente
+  das divergências operacionais. Competências desconhecidas são None; lista
+  conhecida vazia continua vazia. Prioridade, prazo, equipe, responsável,
+  competências, estimativa e autorização de transferência faltantes são sinalizados.
+  Turno de referência inexistente também é uma pendência explícita. `data_complete`
+  é falso diante dessas pendências, inclusive nas observações históricas.
+
+Os números Decimal são convertidos em números JSON somente ao apresentar a
+evidência de auditoria. Snapshots/planejamento devem usar os dados Decimal e as
+pendências da análise atual, não tomar decisões a partir de uma soma parcial ou
+de valores JSON arredondados pela apresentação.
+O atributo `records` auxilia exclusivamente a criação dos vínculos dentro da
+transação; contém objetos ORM da sessão e não é um snapshot para o motor. Após
+`analyze_case`, consumidores devem usar `current.payload`, os totais Decimal e
+`original`, que permanecem utilizáveis mesmo depois de fechar a sessão.
+
+### Divergência operacional e evidência
+
+Cada tarefa aberta ainda atribuída à pessoa com ausência confirmada no turno
+intersectado gera uma evidência `rh_task_assignment`. O evento persistido tem FK
+para o caso, IDs da ausência/funcionário/tarefas, metadados de origem e atualização
+das fontes, período, turno e momento `detected_at`. Os vínculos em `case_tasks`
+garantem a referência permanente às tarefas; não se cria uma tabela paralela de
+divergências. Não há campos de diagnóstico ou causa médica.
+
+A identidade lógica da divergência é `(case_id, absence_id, task_id)`. Snapshots
+posteriores versionam as evidências dessa mesma divergência; não representam
+novas ocorrências a somar em um dashboard. Consumidores futuros devem distinguir
+observações de auditoria da quantidade de divergências únicas.
+
+`correction_confirmed` permanece falso. Proposta, aprovação, reserva, notificação
+e entrega não são usadas como prova de correção. A observação atual pode mostrar
+tarefa concluída ou outro responsável no histórico, mas essa análise não valida
+o fluxo de aceite nem marca uma correção definitiva, cobertura ou encerramento.
+
+### Reanálise e preservação do histórico
+
+`analyze_case(session, case_id, absence_id)` é uma operação interna explícita,
+executada com sessão nova: valida o vínculo caso/ausência, adquire `BEGIN IMMEDIATE`
+no SQLite e grava dentro de uma única transação. Retorna `ImpactReport` com
+`original` (primeiro registro persistido), `current` (análise atual tipada),
+`audit_event_id` e `changed`. Não cria outra ausência ou caso.
+
+O registro usa os eventos existentes `impact.detected` e
+`impact.no_registered_tasks`. Um fingerprint das evidências atuais/históricas,
+incluindo metadados das fontes, é comparado à **última** observação da mesma
+ausência/caso. O instante da nova análise não entra nessa comparação. Dados
+idênticos não acrescentam evento, vínculo ou divergência. Uma mudança real gera
+uma observação append-only com instante posterior à anterior, inclusive se os
+dados voltarem a um estado já observado no passado. O lock e a mesma transação
+impedem duplicação por duas reanálises concorrentes.
+
+Tarefas posteriormente concluídas/reatribuídas continuam em `historical_task_ids`
+e `historical_tasks`, com seus estados reais. Novas tarefas afetadas detectadas
+podem acrescentar vínculos, sem remover os anteriores. O primeiro snapshot não
+é sobrescrito; a situação atual e o conjunto histórico são distintos. Registros
+legados sem estimativas/evidências completas são preservados tal como gravados;
+uma nova observação pode enriquecê-los, sem inventar horas originais retroativas.
+
+Na criação de ausência, `cases.py` prepara uma única análise, reutiliza suas
+tarefas para criar os vínculos e persiste a observação como o terceiro evento da
+mesma transação. Continua havendo exatamente três eventos iniciais. Reenvio
+idêntico do POST retorna 200 antes de executar nova análise; criação e conflitos
+mantêm 201 e 409. Falha na análise/auditoria reverte também ausência/caso/vínculos.
+Caso sem tarefas permanece open e nunca é declarado resolvido.
+
+Não foi necessária migração: a persistência usa os vínculos e o JSON de auditoria
+existentes, com `schema_version=1` interno. Não há backfill destrutivo. Permanecem
+para outras atividades a montagem do snapshot do motor, elegibilidade global,
+planejamento e validação/correção efetiva após aceite; nenhuma dessas ações foi
+implementada por esta análise.

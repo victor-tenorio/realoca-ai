@@ -150,8 +150,9 @@ versões de plano e política são inteiros positivos.
   plano), criação e encerramento. `case_absences` e `case_tasks` são associações
   permanentes e únicas. Mudar o responsável da tarefa não muda o conjunto
   originalmente afetado. Remover/alterar esses vínculos é bloqueado no SQLite.
-  O serviço futuro de criação garantirá um conjunto não vazio e coerente de
-  ausências/tarefas; o estado será recalculado em `services/cases.py`.
+  A criação garante uma ausência confirmada e vínculos coerentes às tarefas
+  cadastradas afetadas, que podem ser um conjunto vazio sem resolver o caso.
+  O recálculo de estado dos fluxos futuros ficará em `services/cases.py`.
 - `coverage_plans` identifica o plano e sua versão única por caso, com política
   aplicada e criação. Planos são históricos imutáveis. O ponteiro
   `cases.plan_version` será sincronizado pelo futuro serviço de planejamento.
@@ -197,8 +198,8 @@ registrá-la na auditoria, preservando a anterior. Não se sobrescrevem versões
 `policy_version`, `reason` e `result`. Caso é opcional para ações globais, como
 mudança de política; uma tentativa exige caso correspondente. UPDATE, DELETE e
 substituição de um ID existente são bloqueados por triggers SQLite, inclusive em
-SQL direto. A geração automática dos eventos pelo serviço de auditoria ainda não
-existe. Campos livres devem conter somente razões operacionais e resultados
+SQL direto. A criação de ausência agora gera seus eventos pelo serviço de
+auditoria na mesma transação. Campos livres devem conter somente razões operacionais e resultados
 sanitizados, sem dados médicos, tokens ou credenciais.
 
 ### Integração e mensagens
@@ -265,3 +266,171 @@ triggers, preservando RH, tarefas, turno e seed da revisão anterior; naturalmen
 descarta os registros dos módulos novos. Testes usam bancos temporários para
 upgrade vazio, atualização com seed existente, downgrade com dados novos e
 reaplicação. Nenhum endpoint, planejador ou schema público foi alterado.
+
+## Consultas de funcionários e tarefas — contrato v1.1
+
+As rotas de consulta agora publicadas são `GET /api/v1/employees` e
+`GET /api/v1/tasks`. Retornam arrays JSON diretos dos registros persistidos, com
+os campos do modelo comum do contrato, sem campos internos ou envelopes.
+Não há autenticação exigida para essas consultas no contrato atual; o token de
+integração servidor/n8n não foi aplicado às leituras. A autenticação do frontend
+permanece uma decisão pendente do contrato.
+
+O contrato não define filtros, paginação ou seleção de data por query string.
+Não foram acrescentados. Parâmetros desconhecidos são rejeitados com HTTP 400
+e `INVALID_QUERY_PARAMETERS`, em vez de serem ignorados. As tarefas incluem
+todos os estados oficiais no turno configurado, inclusive `done`; somente o
+cálculo de carga exclui concluídas. Esta leitura não implementa conclusão.
+
+### Período, projeção e publicação
+
+- O período é o único turno cuja `reference_date` coincide com
+  `DEMO_REFERENCE_DATE`. As listagens não criam turno, seed ou qualquer registro.
+  Sem pessoas cadastradas, a consulta retorna `[]`. Sem turno da data, tarefas
+  retorna `[]`, pois não existem tarefas desse período; havendo pessoas sem
+  capacidade de referência, funcionários retorna 422, sem presumir carga zero.
+- Capacidade individual usa as mesmas fórmulas de `services/capacity.py`, com
+  projeção em lote: tarefas abertas e reservas ativas somente do mesmo turno.
+  Não existem queries por pessoa/tarefa. O helper individual continua disponível;
+  a versão em lote compartilha a soma com propagação de desconhecidos e o cálculo.
+- `availability` é derivada: ausência confirmada que intersecciona o turno
+  (`starts_at < shift.ends_at` e `ends_at > shift.starts_at`) produz `absent`.
+  Sem essa ausência, capacidade conhecida zero produz `unavailable` para o turno;
+  vínculo com turno e capacidade positiva produz `available`, mesmo que a carga
+  já ocupe toda a capacidade. Não se infere folga por presença. A ausência tem
+  precedência sobre capacidade zero; nenhuma causa de ausência é publicada.
+  Outras causas de indisponibilidade pessoal ainda não têm fonte persistida e
+  não são inventadas por estas consultas.
+- Habilidades conhecidas vazias são arrays vazios. Habilidades desconhecidas não
+  viram arrays vazios; são pendências de publicação. Equipe de origem e ID do
+  responsável são retornados como campos separados da tarefa. Não se expõe um
+  indicador de transferência sem histórico, nem se acrescenta esse campo ao
+  contrato. A interface pode correlacionar o responsável com a lista de pessoas.
+- Schemas de saída são Pydantic separados dos modelos ORM, com enums oficiais,
+  datas com fuso e horas JSON numéricas. Campos opcionais da importação não foram
+  tornados opcionais no contrato público. Horas não são arredondadas durante a
+  soma; a serialização JSON é a apresentação final.
+
+A estratégia de publicação é bloquear **a listagem inteira** com HTTP 422 e
+`INCOMPLETE_SOURCE_DATA` se qualquer registro do escopo não puder cumprir o schema.
+Os detalhes identificam registros e nomes dos campos pendentes, sem expor dados
+médicos. Não se retorna lista parcial, não se omite registro inválido e não se
+publica `null` em campo obrigatório. Estimativa desconhecida em tarefa atribuída
+também bloqueia a carga do funcionário, não a transforma em soma parcial.
+
+O contrato v1.1 permite somente `slack`. O seed de novas bases usa Slack para
+todas as pessoas. Registros legados com `teams` permanecem no armazenamento
+histórico, porém bloqueiam a publicação de funcionários com pendência em
+`preferred_channel`; a consulta nunca os converte nem altera. Corrigir a fonte
+ou planejar a migração desses registros é uma ação explícita posterior. As
+migrações históricas e os testes de histórico não foram reescritos.
+
+Erros seguem `{"error":{"code":"...","message":"...","details":{}}}`.
+Validação de requisição usa 400, impedimento de publicação usa 422, falhas de
+banco usam 503 e falhas internas usam 500 sem mensagens SQL ou stack traces.
+Os handlers também normalizam 404/405. `/health` continua fora de `/api/v1`.
+
+### Equipes e frontend
+
+A proposta de equipes foi aprovada por Mateus, conforme informado pela usuária.
+`GET /api/v1/teams` integra a extensão compatível do contrato v1.2, seção 13.
+Schema, exemplo e regras estão também em `docs/teams-query-proposal.md`.
+O serviço reutiliza o cálculo individual em lote e agrega por equipe atual;
+não consulta novamente por equipe ou membro. Campos desconhecidos propagam
+`null` no agregado correspondente e `complete=false`, sem publicar somas parciais.
+O helper `team_capacity` anterior mantém sua interface; a projeção da nova rota
+inclui adicionalmente reservas, ocupação e utilização. Sem turno para a data,
+capacidade de membros é desconhecida e os totais registrados de tarefas/reservas
+são zero, pois não existem vínculos com esse turno. Equipes sem membros têm
+capacidade/carga zero e utilização não aplicável.
+
+Não há filtros contratados a validar por valor: testes verificam a rejeição de
+parâmetros não suportados. Novos filtros por equipe, status, prioridade ou
+responsável exigem definição no contrato. CORS não foi aberto genericamente:
+se o frontend usar outra origem, será necessário configurar explicitamente as
+origens autorizadas. PowerShell e o Swagger na mesma origem não dependem de CORS.
+
+## Criar e confirmar ocorrência de ausência
+
+`POST /api/v1/absences` implementa a operação já contratada: registra ausência
+**confirmada** e cria um caso `open`. Não há rascunho ou rota separada de
+confirmação. `confirmed` é booleano estrito e deve ser `true`; `false` produz
+HTTP 422 (`ABSENCE_NOT_CONFIRMED`), sem gravação. Corpo inválido, datas sem fuso,
+período vazio/invertido ou campos extras produzem 400; funcionário inexistente,
+404. Datas são strings ISO 8601 com fuso, normalizadas para UTC. IDs e metadados
+de origem são strings não vazias; nomes não são usados para identificar pessoas.
+Nenhum campo de diagnóstico/causa médica é aceito. A API não exige token interno
+n8n nessa operação Front/BP; autenticação do frontend continua não especificada.
+
+### Decisões para lacunas documentais
+
+- A igualdade da ocorrência usa `(source_system, external_id)`, seguindo a
+  unicidade existente de importação. Empregado, início/fim normalizados e
+  confirmação devem coincidir. Reenvio idêntico retorna 200 e os mesmos IDs,
+  com o estado **atual** do caso, sem recriar vínculos ou auditoria. Não recalcula
+  tarefas afetadas no reenvio. Conteúdo diferente gera 409
+  `EXTERNAL_ID_CONFLICT`, com o caso anterior quando existir, sem sobrescrever.
+- Os limites de sobreposição entre ausências não estavam explícitos. Foi adotado
+  o mesmo intervalo semiaberto já usado na consulta de disponibilidade:
+  `[starts_at, ends_at)`. Há conflito se `a.starts_at < b.ends_at` e
+  `a.ends_at > b.starts_at`, para o mesmo funcionário, entre registros
+  confirmados, independentemente da fonte. Intervalos adjacentes são permitidos.
+  Conflito retorna 409 `ABSENCE_OVERLAP`, identificando o caso existente.
+- Importações legadas podem ter ausência sem caso. A API não inventa um caso
+  anterior: reenvio idêntico gera 409 `ABSENCE_CASE_MISSING`; conflito por
+  sobreposição inclui `absence_id` e só inclui `case_id` se houver vínculo real.
+  Importação `confirmed=false` não é silenciosamente promovida para confirmada
+  pelo mesmo identificador: a divergência de conteúdo retorna 409.
+- A fonte simulada `services/task_source.py` lê as tarefas atualmente atribuídas
+  ao funcionário com status `open`/`in_progress`, no único turno de
+  `DEMO_REFERENCE_DATE`, desde que turno e ausência se intersectem. Tarefas
+  concluídas, de outros funcionários ou turnos são excluídas. `due_at` é prazo,
+  não intervalo de execução; não se deduz início de tarefa a partir do prazo.
+  Por isso todas as tarefas abertas desse turno intersectado são consideradas.
+  `transfer_allowed=false` ou estimativa desconhecida não ocultam tarefa afetada;
+  elegibilidade e planejamento pertencem às atividades futuras.
+- Não havia regra de encerramento sem tarefas registradas. O caso permanece
+  `open`, versão zero, sem `closed_at`. Auditoria `impact.no_registered_tasks`
+  marca conjunto registrado vazio e `coverage_confirmed=false`. Não se infere
+  ausência de trabalho não cadastrado, solução ou cobertura de 100%. A política
+  futura para revisão/encerramento desse caso permanece pendente.
+
+### Transação, concorrência e auditoria
+
+O serviço `cases.register_confirmed_absence` controla uma única transação para
+ausência, caso, associações e auditoria. No SQLite, executa `BEGIN IMMEDIATE`
+**antes da primeira leitura**, serializando escritores também entre processos.
+Após adquirir o lock, revalida identidade e sobreposição. A unicidade de origem
+existente e os triggers novos são proteções adicionais no banco. Se não for
+possível adquirir o lock dentro do timeout do driver, a operação retorna 503
+sem criação parcial; o cliente pode reenviar usando a mesma chave externa.
+Não se afirma suporte equivalente à concorrência em outros bancos nesta etapa.
+
+`services/impact.py` prepara a divergência RH/tarefas; `services/audit.py` a grava
+como registro append-only com IDs do funcionário/ausência/tarefas e contagem.
+São três eventos: `absence.confirmed`, `case.opened` e `impact.detected` (ou
+`impact.no_registered_tasks`). O ator `api:absences` identifica o serviço, não
+uma identidade de usuário autenticada. Nenhum token, causa médica ou request
+completo é persistido na auditoria. Os vínculos e o resultado da divergência
+permanecem mesmo quando o responsável atual da tarefa mudar posteriormente.
+
+A migração incremental `b07c91d42e36` preserva as revisões anteriores e:
+
+- Acrescenta índice de funcionário/intervalo e triggers SQLite que bloqueiam
+  INSERT/UPDATE de ausências confirmadas sobrepostas, inclusive por SQL direto.
+  Registros já existentes não são apagados ou corrigidos pela migração.
+- Permite `audit_events.policy_version=NULL` **somente** nos quatro tipos de
+  evento de registro de ausência/caso/impacto listados acima. Não há decisão de
+  política nessa operação; NULL significa não aplicável. Decisões de política
+  continuam exigindo uma versão real por CHECK/FK. Não se cria política fictícia
+  ou default implícita para satisfazer a auditoria. A reconstrução da tabela no
+  SQLite preserva dados e reinstala as proteções append-only.
+- O downgrade funciona se todos os eventos tiverem versão real (ou não houver
+  eventos). Se houver histórico não vinculado a política, é bloqueado antes de
+  modificar o esquema: a revisão anterior exige NOT NULL, e não é permitido
+  apagar auditoria ou inventar uma versão para adaptar esse histórico.
+
+O registro não altera responsáveis, estimativas, status das tarefas, carga,
+reservas ou histórico de atribuições. Não chama o motor, não seleciona
+substitutos, não cria propostas e não envia mensagens. Reenvios e conflitos não
+geram novamente eventos de criação.

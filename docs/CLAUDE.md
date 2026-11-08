@@ -4,7 +4,7 @@ Atualização 08/11/2026: Slack é o único canal de comunicação do MVP; remov
 
 Converge Challenge 2026 · Branch: feat/backend-api · Dona: Amanda Leia este arquivo inteiro antes de gerar ou alterar código.
 
-Hierarquia de fontes: (1) docs/api-contract.md (Contrato Técnico de Integração v1.1) manda em rotas, JSON, nomes de campos, estados e eventos. (2) docs/spec.md (MVP) manda em regras de negócio. (3) Este arquivo resume os dois e define convenções de código. Em conflito, pare e pergunte; nunca "resolva" mudando o contrato.
+Hierarquia de fontes: (1) docs/api-contract.md (Contrato Técnico de Integração v1.2) manda em rotas, JSON, nomes de campos, estados e eventos. (2) docs/spec.md (MVP) manda em regras de negócio. (3) Este arquivo resume os dois e define convenções de código. Em conflito, pare e pergunte; nunca "resolva" mudando o contrato.
 
 1. O que é o projeto
 
@@ -170,6 +170,7 @@ Caso de referência: A (Python, 2h; Carlos ou Pedro) e B (Excel, 2h; só Carlos)
 GET /health
 POST /api/v1/demo/reset (restrito)
 GET /api/v1/employees
+GET /api/v1/teams
 GET /api/v1/tasks
 POST /api/v1/absences
 GET /api/v1/cases

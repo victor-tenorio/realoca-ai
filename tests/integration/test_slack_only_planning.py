@@ -51,6 +51,8 @@ def test_slack_only_planning_excludes_teams_and_blank_slack_recipients(session):
         assert employee.preferred_channel == Channel.SLACK
         assert employee.channel_user_id and employee.channel_user_id.strip()
 
+    # Release the read transaction before the writer-locked orchestration.
+    session.rollback()
     # Planning must be able to queue a real Slack offer instead of rolling
     # the whole transaction back with SLACK_RECIPIENT_MISSING.
     result = planning.plan_and_authorize(session, case.case_id, actor="test:slack")

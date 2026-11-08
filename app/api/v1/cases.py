@@ -9,7 +9,7 @@ import os
 
 from app.api.v1.query_parameters import reject_uncontracted_parameters
 from app.db import get_session
-from app.services.planning import plan_and_authorize
+from app.services.planning import ESCALATION_OPTIONS, plan_and_authorize
 from app.services.dispatch import dispatch_pending
 from app.enums import AttemptStatus
 from app.errors import APIError
@@ -25,14 +25,18 @@ def list_cases(session: Annotated[Session, Depends(get_session)]) -> dict:
     for case in session.scalars(select(Case).order_by(Case.created_at.desc(), Case.case_id)):
         pending = session.scalars(select(CoverageAttempt).where(
             CoverageAttempt.case_id == case.case_id,
-            CoverageAttempt.status == AttemptStatus.PENDING_APPROVAL,
+            CoverageAttempt.status.in_({AttemptStatus.PENDING_APPROVAL,
+                                        AttemptStatus.ESCALATED}),
         )).all()
+        escalated = sum(item.status == AttemptStatus.ESCALATED for item in pending)
         items.append({
             "case_id": case.case_id, "status": case.status.value,
             "plan_version": case.plan_version,
             "created_at": case.created_at.isoformat(),
             "task_count": len(case.tasks),
-            "pending_approval_count": len(pending),
+            "pending_approval_count": len(pending) - escalated,
+            "escalation_count": escalated,
+            "requires_bp_review": bool(pending),
         })
     return {"cases": items, "total": len(items)}
 
@@ -68,6 +72,13 @@ def get_case(case_id: str, session: Annotated[Session, Depends(get_session)]) ->
         } for item in proposals],
         "pending_approvals": [item.attempt_id for item in proposals
                               if item.status == AttemptStatus.PENDING_APPROVAL],
+        "escalations": [{
+            "attempt_id": item.attempt_id,
+            "task_id": item.task_id,
+            "reason_code": item.reason,
+            "alternatives": ESCALATION_OPTIONS.get(
+                item.reason, ["Revisão manual do BP", "Rever prazo"]),
+        } for item in proposals if item.status == AttemptStatus.ESCALATED],
     }
 
 

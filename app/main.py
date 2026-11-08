@@ -9,6 +9,8 @@ from app.errors import register_error_handlers
 from app.api.v1.integrations import router as integrations_router
 from app.api.v1.proposals import router as proposals_router
 from app.api.v1.cases import router as cases_router
+from app.api.v1.audit import router as audit_router
+from app.api.v1.dashboard import router as dashboard_router
 
 app = FastAPI(title="Realoca AI API")
 
@@ -21,3 +23,5 @@ register_error_handlers(app)
 app.include_router(integrations_router)
 app.include_router(proposals_router, prefix="/api/v1")
 app.include_router(cases_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
+app.include_router(dashboard_router, prefix="/api/v1")

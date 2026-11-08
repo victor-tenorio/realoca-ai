@@ -13,6 +13,47 @@ from app.models import Case, CoverageAttempt, CoveragePlan, PolicyVersion
 from app.services import audit, cases, dispatch, reservations, snapshot
 
 
+ESCALATION_OPTIONS = {
+    "NO_AVAILABLE_CANDIDATE": ["Revisar escala", "Solicitar apoio de outra equipe", "Rever prazo"],
+    "NO_SKILL_MATCH": ["Buscar competência em outra equipe", "Revisão manual do BP"],
+    "ALL_CANDIDATES_EXCLUDED": ["Negociar novo prazo", "Dividir a tarefa", "Revisão manual do BP"],
+    "INSUFFICIENT_CAPACITY": ["Dividir carga", "Ajustar prazo", "Revisar capacidade com BP"],
+    "TRANSFER_NOT_ALLOWED": ["BP revisar permissão de transferência"],
+    "INCOMPLETE_TASK_DATA": ["Completar campos da fonte", "Revisão manual do BP"],
+}
+
+
+def _escalate_uncovered(session, case, *, plan_id: str, version: int,
+                        policy_version: int, items: list[dict], actor: str, at: datetime):
+    """Persist uncovered work rather than counting it as confirmed coverage."""
+    rows = []
+    audit_rows = []
+    for item in items:
+        reason_code = item["reason_code"]
+        attempt = CoverageAttempt(
+            attempt_id=f"att-{uuid4()}", case_id=case.case_id,
+            plan_id=plan_id, plan_version=version,
+            policy_version=policy_version, task_id=item["task_id"],
+            candidate_employee_id=None, status=AttemptStatus.ESCALATED,
+            reason=reason_code, created_at=at,
+        )
+        session.add(attempt)
+        alternatives = ESCALATION_OPTIONS.get(reason_code, ["Revisão manual do BP", "Rever prazo"])
+        audit_rows.append((attempt.attempt_id, item["task_id"], reason_code, alternatives))
+        rows.append({"attempt_id": attempt.attempt_id,
+                     "task_id": item["task_id"], "reason_code": reason_code,
+                     "alternatives": alternatives})
+    session.flush()
+    for attempt_id, task_id, reason_code, alternatives in audit_rows:
+        audit.record(session, case_id=case.case_id,
+                     attempt_id=attempt_id, actor=actor,
+                     action="plan.escalated", timestamp=at,
+                     policy_version=policy_version, reason=reason_code,
+                     result={"task_id": task_id,
+                             "reason_code": reason_code, "alternatives": alternatives})
+    return rows
+
+
 def _validate_engine_result(result: dict, inputs: dict) -> None:
     """Do not persist a plan with ghost candidates or uncovered tasks omitted."""
     if (not isinstance(result, dict) or result.get("case_id") != inputs["case_id"]
@@ -145,7 +186,36 @@ def plan_and_authorize(session: Session, case_id: str, *, actor: str) -> dict:
             # The demo's policy is a real versioned row, not a mutable total.
             session.add(PolicyVersion(policy_version=1, created_at=datetime.now(UTC)))
             session.flush()
-        result = create_plan(session, case, actor=actor)
+        try:
+            result = create_plan(session, case, actor=actor)
+        except APIError as exc:
+            if exc.code != "INCOMPLETE_TASK_DATA":
+                raise
+            # Unknown source data cannot be assigned by inference. Keep the
+            # actual tasks explicitly uncovered for the BP to investigate.
+            policy = session.scalar(select(PolicyVersion).order_by(
+                PolicyVersion.policy_version.desc()).limit(1))
+            version = case.plan_version + 1
+            now = max(datetime.now(UTC), case.created_at)
+            plan = CoveragePlan(plan_id=f"plan-{uuid4()}", case_id=case.case_id,
+                                plan_version=version, policy_version=policy.policy_version,
+                                created_at=now)
+            session.add(plan)
+            case.plan_version = version
+            session.flush()
+            if case.status == CaseStatus.OPEN:
+                cases.transition_case(session, case, CaseStatus.PLANNING,
+                                      actor=actor, reason="Fonte de tarefas incompleta", at=now)
+            uncovered = [{"task_id": task.task_id,
+                          "reason_code": "INCOMPLETE_TASK_DATA"}
+                         for task in case.tasks]
+            _escalate_uncovered(session, case, plan_id=plan.plan_id,
+                               version=version, policy_version=policy.policy_version,
+                               items=uncovered, actor=actor, at=now)
+            cases.recalculate_case_status(session, case, actor=actor,
+                                          reason="Escalonado: dados insuficientes", at=now)
+            return {"case_id": case.case_id, "plan_id": plan.plan_id,
+                    "plan_version": version, "proposals": [], "uncovered": uncovered}
         enriched = []
         for proposal in result["proposals"]:
             attempt = session.get(CoverageAttempt, proposal["attempt_id"])
@@ -173,6 +243,15 @@ def plan_and_authorize(session: Session, case_id: str, *, actor: str) -> dict:
                 "policy_action": policy_action, "status": attempt.status.value,
                 "reason": proposal["reason"],
             })
+        if result["uncovered"]:
+            plan = session.get(CoveragePlan, result["plan_id"])
+            _escalate_uncovered(session, case, plan_id=plan.plan_id,
+                               version=plan.plan_version,
+                               policy_version=plan.policy_version,
+                               items=result["uncovered"], actor=actor,
+                               at=max(datetime.now(UTC), plan.created_at))
+            cases.recalculate_case_status(session, case, actor=actor,
+                                          reason="Há tarefas sem candidato")
         session.flush()
         return {"case_id": result["case_id"], "plan_id": result["plan_id"],
                 "plan_version": result["plan_version"],

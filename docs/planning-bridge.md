@@ -48,6 +48,27 @@ na inbox para recuperação por `python -m app.services.event_processing`.
 **Consultas BP:** `GET /api/v1/cases` lista casos e contagem de aprovações;
 `GET /api/v1/cases/{case_id}` mostra tentativas, motivos e pendências reais.
 
+**A16 — Escalonamentos:** qualquer tarefa sem candidato, com recusa sem
+alternativa ou com dados insuficientes é persistida como tentativa `escalated`
+com motivo auditado e sugestões de ação **genéricas** para o BP (rever prazo,
+dividir, pedir apoio, corrigir dados). `GET /cases` fornece `escalation_count`
+e `requires_bp_review`, e `GET /cases/{id}` fornece `escalations` com motivos
+e opções. Esses casos nunca são contados como cobertura confirmada.
+
+**A17 — Auditoria e métricas:** `GET /api/v1/audit?case_id=...` retorna apenas
+eventos persistidos, com autor, ação, motivo, horário e versão de política.
+`GET /api/v1/dashboard` agrega ausências, casos, tarefas únicas, horas
+impactadas/planejadas/confirmadas/concluídas, recusas, expirações,
+escalonamentos e fila BP; horas desconhecidas são `null`. Sem números
+financeiros artificiais. Métricas de conclusão só refletem tarefas realmente
+marcadas `done`.
+
+**A18 — Conclusão da origem:** aceite põe a tarefa `in_progress`, mas não
+concluída. `POST /api/v1/tasks/{task_id}/complete` é idempotente, exige
+aceite no caso de tarefas relacionadas a uma ausência, grava auditoria,
+marca `done`, libera horas comprometidas pelo cálculo de capacidade e só
+então permite ao caso transicionar para `completed`.
+
 **Limites atuais:** o motor do Mateus permanece heurístico. O outbox foi
 testado com um webhook simulado, não foi executado contra n8n real; é preciso
 conectar a URL ao fluxo de Victor antes do teste ponta a ponta. O envio pode

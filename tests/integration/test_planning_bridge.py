@@ -438,6 +438,57 @@ def test_case_queries_expose_real_pending_bp_queue(scenario):
         app.dependency_overrides.clear()
 
 
+def test_incomplete_source_is_persisted_as_bp_escalation(scenario):
+    from app.db import get_session
+    from app.main import app
+
+    session, case, tasks, created = scenario
+    tasks[0].required_skills_known = False
+    session.commit()
+
+    def override():
+        with Session(session.get_bind()) as s:
+            yield s
+
+    app.dependency_overrides[get_session] = override
+    try:
+        with TestClient(app) as client:
+            planned = client.post(f"/api/v1/cases/{case.case_id}/plan")
+            detail = client.get(f"/api/v1/cases/{case.case_id}")
+            overview = client.get("/api/v1/cases")
+        assert planned.status_code == 200, planned.text
+        assert planned.json()["proposals"] == []
+        assert planned.json()["uncovered"]
+        assert all(item["reason_code"] == "INCOMPLETE_TASK_DATA"
+                   for item in planned.json()["uncovered"])
+        assert detail.json()["escalations"]
+        assert overview.json()["cases"][0]["requires_bp_review"] is True
+        assert overview.json()["cases"][0]["escalation_count"] == len(tasks)
+        assert case.status != CaseStatus.COVERAGE_CONFIRMED
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_no_eligible_candidate_creates_real_uncovered_attempts(scenario):
+    session, case, tasks, created = scenario
+    for employee in session.scalars(select(Employee)):
+        employee.skills_known = False
+    session.commit()
+    with Session(session.get_bind()) as planner:
+        outcome = planning.plan_and_authorize(planner, case.case_id,
+                                              actor="test:no-candidate")
+    assert outcome["proposals"] == []
+    assert len(outcome["uncovered"]) == len(tasks)
+    session.expire_all()
+    escalated = list(session.scalars(select(CoverageAttempt).where(
+        CoverageAttempt.case_id == case.case_id,
+        CoverageAttempt.status == AttemptStatus.ESCALATED,
+    )))
+    assert len(escalated) == len(tasks)
+    assert all(item.candidate_employee_id is None for item in escalated)
+    assert case.status != CaseStatus.COVERAGE_CONFIRMED
+
+
 def test_post_plan_http_classifies_reserves_and_prepares_outbox(scenario, monkeypatch):
     from app.db import get_session
     from app.main import app

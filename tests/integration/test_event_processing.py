@@ -16,6 +16,7 @@ from app.models import (
     ProcessedEvent, Reservation, Shift, Task, TaskAssignment,
 )
 from app.services import dispatch, planning, reservations
+from app.services.capacity import committed_hours
 from app.errors import APIError
 
 
@@ -32,12 +33,8 @@ def offer_fixture(session, monkeypatch):
                       starts_at=shift.starts_at, ends_at=shift.ends_at,
                       confirmed=True, source_system="event-tests", external_id="evt-1",
                       updated_at=created)
-    related = list(session.scalars(select(Task).where(
-        Task.assignee_employee_id == original_owner,
-        Task.shift_id == task.shift_id, Task.status == TaskStatus.OPEN,
-    )))
     case = Case(case_id="event-case", status=CaseStatus.OPEN, plan_version=0,
-                created_at=created, absences=[absence], tasks=related)
+                created_at=created, absences=[absence], tasks=[task])
     session.add_all([case, PolicyVersion(policy_version=1, created_at=created)])
     result = planning.create_plan(session, case, actor="test:events", at=created)
     assert result["proposals"]
@@ -88,6 +85,8 @@ def test_acceptance_reassigns_source_only_once_after_authorized_response(offer_f
     assert session.get(CoverageAttempt, attempt_id).status == AttemptStatus.ACCEPTED
     assert session.get(Task, task_id).assignee_employee_id == candidate_id
     assert session.get(CoverageAttempt, attempt_id).reservation.released_at is not None
+    assert session.get(Task, task_id).status == TaskStatus.IN_PROGRESS
+    assert session.get(Case, case_id).status == CaseStatus.COVERAGE_CONFIRMED
     assert session.scalar(select(func.count()).select_from(TaskAssignment)) == 1
     repeat = client.post("/api/v1/integrations/attempt-events", headers={
         "X-Internal-Token": "test-only",
@@ -186,3 +185,60 @@ def test_replan_after_refusal_is_idempotent(offer_fixture):
                                           attempt_id, actor="test:retry")
     assert outcome["status"] == "already_replanned"
     assert session.scalar(select(func.count()).select_from(CoveragePlan)) == before
+
+
+def test_task_completion_is_separate_from_coverage_and_frees_committed_hours(offer_fixture):
+    client, session, case_id, attempt_id, task_id, original_owner = offer_fixture
+    assert client.post(f"/api/v1/tasks/{task_id}/complete").status_code == 409
+    assert _callback(client, attempt_id, "offer.accepted").status_code == 202
+    session.expire_all()
+    task = session.get(Task, task_id)
+    candidate_id = task.assignee_employee_id
+    before = committed_hours(session, task.shift_id, [candidate_id])
+    assert task.status == TaskStatus.IN_PROGRESS
+    assert session.get(Case, case_id).status == CaseStatus.COVERAGE_CONFIRMED
+    completed = client.post(f"/api/v1/tasks/{task_id}/complete")
+    repeated = client.post(f"/api/v1/tasks/{task_id}/complete")
+    assert completed.status_code == repeated.status_code == 200
+    assert completed.json() == {"task_id": task_id, "status": "done", "duplicate": False}
+    assert repeated.json()["duplicate"] is True
+    session.expire_all()
+    assert session.get(Task, task_id).status == TaskStatus.DONE
+    assert committed_hours(session, task.shift_id, [candidate_id]) == before - task.estimated_hours
+    assert session.get(Case, case_id).status == CaseStatus.COMPLETED
+
+
+def test_dashboard_and_audit_reflect_real_events_only(offer_fixture):
+    client, session, case_id, attempt_id, task_id, original_owner = offer_fixture
+    task = session.get(Task, task_id)
+    initial = client.get("/api/v1/dashboard")
+    assert initial.status_code == 200
+    assert initial.json()["affected_tasks"] == 1
+    assert initial.json()["affected_hours"] == float(task.estimated_hours)
+    assert initial.json()["confirmed_hours"] == 0
+    assert initial.json()["without_confirmed_coverage"] == 1
+
+    assert _callback(client, attempt_id, "offer.accepted").status_code == 202
+    confirmed = client.get("/api/v1/dashboard").json()
+    assert confirmed["confirmed_hours"] == float(task.estimated_hours)
+    assert confirmed["completed_hours"] == 0
+    assert confirmed["without_confirmed_coverage"] == 0
+    assert confirmed["in_progress_tasks"] == 1
+
+    assert client.post(f"/api/v1/tasks/{task_id}/complete").status_code == 200
+    finished = client.get("/api/v1/dashboard").json()
+    assert finished["completed_hours"] == float(task.estimated_hours)
+    assert finished["completed_tasks"] == 1
+    assert finished["cases_open"] == 0
+
+    timeline = client.get(f"/api/v1/audit?case_id={case_id}")
+    assert timeline.status_code == 200
+    assert timeline.json()["events"]
+    assert all(row["case_id"] == case_id for row in timeline.json()["events"])
+    assert {row["action"] for row in timeline.json()["events"]} >= {
+        "offer.accepted", "task.completed",
+    }
+    assert all(row["actor"] and row["policy_version"]
+               for row in timeline.json()["events"])
+    assert client.get("/api/v1/audit?unexpected=1").status_code == 400
+    assert client.get("/api/v1/dashboard?unexpected=1").status_code == 400

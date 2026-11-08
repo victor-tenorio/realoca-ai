@@ -1,5 +1,18 @@
 # n8n ↔ Slack ↔ FastAPI — handoff do Realoca AI
 
+## Workflow V2 exportado e revisado (08/11/2026)
+
+- Template sem credenciais: [n8n/workflows/realoca-slack-api-v2.template.json](workflows/realoca-slack-api-v2.template.json), proveniente do export real do workflow "Realoca AI | Notificações e Confirmações" e adaptado para 6 nós. Não contém ID de credencial, canal Slack nem URL privada/temporária.
+- A cópia para importação no n8n da equipe foi entregue separadamente na conversa. Ela mantém as referências de credencial da instância e o canal fictício de demonstração #novo-canal, mas **está desativada** e tem o webhook `realoca-ai-notificacoes-v2` para não conflitar com o workflow original.
+- Nodes: Webhook com Header Auth → Code de validação estrita de `offer.created` → Slack Send and Wait → Set de resposta (accepted/declined/expired) → Code de conversão A13 → HTTP Request POST autenticado para o backend.
+- O Slack Send and Wait usa `response_deadline_at` como limite de espera; quando não há resposta até o prazo, o Code produz `offer.expired` com horário igual ao prazo. O backend só aceita se o prazo já tiver vencido e a oferta real existir.
+- O POST de callback está configurado para credencial genérica `httpHeaderAuth`, **sem segredo no arquivo**. Na aba HTTP Request, selecione/crie a credencial `X-Internal-Token` correspondente a `INTEGRATIONS_INTERNAL_TOKEN` do backend.
+- Na cópia importada do template público, selecione novamente as credenciais Slack e Webhook Header Auth e o canal de demonstração. **Nunca ative o fluxo novo antes de completar as credenciais e usar uma URL válida de produção do n8n**.
+- Na Amanda: configure `N8N_DISPATCH_URL` para webhook **Production** do fluxo novo depois de ativá-lo, `N8N_DISPATCH_TOKEN` para a credencial correspondente do Webhook n8n, e `INTEGRATIONS_INTERNAL_TOKEN` para o HTTP Request de retorno. Reinicie o servidor. Use dados fictícios, roteamento seguro e túnel somente durante a demo.
+- Teste local (não consome créditos): `node --test n8n/tests/workflow-v2.test.mjs`. **Não executa chamadas de rede nem valida credenciais reais.**
+- O canal fixo `#novo-canal` é somente demo: não comprova roteamento individual nem autenticação da identidade do funcionário que clicou. Sem teste com API e n8n reais, V03–V17 não estão concluídas.
+
+
 **Status:** adaptadores de validação e conversão versionados; ainda **não importados nem testados no workflow real**. O n8n da equipe já possui Webhook, Slack "Send and Wait for Response" e um Code node "Registrar resposta da proposta". Não substitua esse fluxo sem exportá-lo primeiro.
 
 ## Contratos verificáveis

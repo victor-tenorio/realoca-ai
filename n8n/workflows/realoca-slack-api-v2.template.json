@@ -1,0 +1,205 @@
+{
+  "name": "Realoca AI | Slack ↔ API v2 (TEMPLATE SANITIZADO)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "realoca-ai-notificacoes-v2",
+        "authentication": "headerAuth",
+        "options": {},
+        "responseMode": "onReceived"
+      },
+      "id": "425995b7-c534-4a9e-9d80-ea6233d7feaf",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "5a556527-a81b-475e-88c0-474183cdbc8f",
+      "notes": "Webhook autenticado (credencial Header Auth do n8n). URL Production apenas após ativar a cópia de teste.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook POST offer.created do backend Realoca AI. Sem fallback para IDs falsos.\nconst item = $input.first().json;\nconst p = item.body && typeof item.body === 'object' ? item.body : item;\nconst required = ['event_id','case_id','attempt_id','task_id','task_title',\n  'candidate_employee_id','candidate_name','channel_user_id','response_deadline_at','due_at','message'];\nfor (const f of required) {\n  if (typeof p[f] !== 'string' || p[f].trim() === '') throw new Error('INVALID_OFFER: ' + f);\n}\nif (p.event_type !== 'offer.created' || p.channel !== 'slack') throw new Error('INVALID_OFFER: event_type/channel');\nif (typeof p.estimated_hours !== 'number' || !Number.isFinite(p.estimated_hours) || p.estimated_hours <= 0)\n  throw new Error('INVALID_OFFER: estimated_hours');\nif (!/(Z|[+-][0-9]{2}:[0-9]{2})$/i.test(p.response_deadline_at) ||\n    !/(Z|[+-][0-9]{2}:[0-9]{2})$/i.test(p.due_at)) throw new Error('INVALID_OFFER: timestamps must include timezone');\nconst deadline = new Date(p.response_deadline_at).getTime();\nconst due = new Date(p.due_at).getTime();\nif (!Number.isFinite(deadline) || !Number.isFinite(due) || deadline <= Date.now())\n  throw new Error('INVALID_OFFER: response deadline expired or invalid');\n// A mensagem é a aprovada pelo backend; o n8n não decide quem substitui quem.\nreturn [{json: {...p}}];"
+      },
+      "id": "ae3b7bec-7c66-4115-9a6b-18fc716ef7b9",
+      "name": "Code in JavaScript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "notes": "Valida event_type, Slack, IDs, prazo e duração. Não há IDs de demo ou reatribuição feita no n8n.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "operation": "sendAndWait",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "id"
+        },
+        "message": "={{ $json.message }}\n\nevent_id: {{ $json.event_id }}\nattempt_id: {{ $json.attempt_id }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Aceitar",
+            "disapproveLabel": "Recusar"
+          }
+        },
+        "options": {
+          "appendAttribution": false,
+          "limitWaitTime": {
+            "values": {
+              "limitType": "atSpecifiedTime",
+              "maxDateAndTime": "={{ $('Code in JavaScript').item.json.response_deadline_at }}"
+            }
+          }
+        }
+      },
+      "id": "a75a277c-fcaa-453c-8523-eab85654ddc8",
+      "name": "Send a message",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        520,
+        0
+      ],
+      "webhookId": "fda4d472-b512-4eeb-89e7-4fb16eb46bcc",
+      "notes": "Configure o canal Slack permitido ou, em etapa futura, DM validada; nao usar IDs reais do export anterior. CANAL FIXO DE DEMONSTRAÇÃO #novo-canal. Não é DM do funcionário nem garante identidade do respondente. Prazo de espera sincronizado com response_deadline_at.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n  \"offer_event_id\": {{ JSON.stringify($('Code in JavaScript').item.json.event_id) }},\n  \"attempt_id\": {{ JSON.stringify($('Code in JavaScript').item.json.attempt_id) }},\n  \"case_id\": {{ JSON.stringify($('Code in JavaScript').item.json.case_id) }},\n  \"response_deadline_at\": {{ JSON.stringify($('Code in JavaScript').item.json.response_deadline_at) }},\n  \"decision\": {{ JSON.stringify($json.data?.approved === true ? \"accepted\" : ($json.data?.approved === false ? \"declined\" : ($json.data ? \"invalid\" : \"expired\"))) }},\n  \"responded_at\": {{ JSON.stringify($json.data?.respondedAt ?? $now.toISO()) }},\n  \"source\": \"slack\",\n  \"decline_reason\": {{ JSON.stringify($json.data?.reason ?? null) }},\n  \"channel\": {{ JSON.stringify($('Code in JavaScript').item.json.channel) }},\n  \"channel_user_id\": {{ JSON.stringify($('Code in JavaScript').item.json.channel_user_id) }}\n}",
+        "options": {}
+      },
+      "id": "d3eab4b3-f4ec-4f56-9207-23dea24afe2f",
+      "name": "Registrar resposta da proposta",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        790,
+        0
+      ],
+      "notes": "Normaliza approved=true/false; quando Slack atingir timeout sem data, decision=expired. Não expõe credenciais.",
+      "notesInFlow": true
+    },
+    {
+      "id": "40e13bf4-2206-4904-bef9-2541b3763fbb",
+      "name": "Converter resposta para API",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Transforma o resultado do Slack no schema estrito A13; não atribui tarefa.\nconst x = $input.first().json;\nconst attemptId = String(x.attempt_id || '').trim();\nconst decision = String(x.decision || '').toLowerCase().trim();\nif (!attemptId || attemptId.length > 130) throw new Error('INVALID_CALLBACK: attempt_id');\nif (!['accepted','declined','expired'].includes(decision)) throw new Error('INVALID_CALLBACK: decision');\nif (x.channel !== 'slack' || x.source !== 'slack') throw new Error('INVALID_CALLBACK: channel/source');\nlet when;\nlet reason = null;\nif (decision === 'expired') {\n  const deadline = String(x.response_deadline_at || '').trim();\n  if (!/(Z|[+-][0-9]{2}:[0-9]{2})$/i.test(deadline))\n    throw new Error('INVALID_CALLBACK: expiry deadline requires timezone');\n  when = new Date(deadline);\n  if (!Number.isFinite(when.getTime()) || Date.now() < when.getTime())\n    throw new Error('INVALID_CALLBACK: not yet expired');\n  reason = 'Prazo de resposta expirado';\n} else {\n  const timestamp = String(x.responded_at || '').trim();\n  if (!/(Z|[+-][0-9]{2}:[0-9]{2})$/i.test(timestamp))\n    throw new Error('INVALID_CALLBACK: responded_at requires timezone');\n  when = new Date(timestamp);\n  if (!Number.isFinite(when.getTime())) throw new Error('INVALID_CALLBACK: responded_at');\n  if (decision === 'declined') reason = (String(x.decline_reason || '').trim() || 'Recusa registrada no Slack').slice(0,2000);\n}\nconst eventType = decision === 'accepted' ? 'offer.accepted' : decision === 'declined' ? 'offer.refused' : 'offer.expired';\n// Novo ID para callback, distinto do event_id de offer.created. Estável para retries.\nconst eventId = 'evt-n8n-' + attemptId + '-' + (decision === 'declined' ? 'refused' : decision);\nreturn [{json: {\n  event_id: eventId, event_type: eventType, attempt_id: attemptId,\n  channel:'slack', occurred_at: when.toISOString(), reason\n}}];"
+      },
+      "notes": "Gera o body EXATO da API, incluindo offer.expired após timeout. O event_id é determinístico por tentativa e decisão.",
+      "notesInFlow": true
+    },
+    {
+      "id": "f10fcaa3-6fbb-4e6d-b1d5-41587d21a00d",
+      "name": "Enviar callback ao backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://SEU-BACKEND-PUBLICO.example/api/v1/integrations/attempt-events",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "notes": "PENDENTE: selecione credencial Header Auth no próprio n8n: Name = X-Internal-Token, Value = segredo INTEGRATIONS_INTERNAL_TOKEN do backend. A URL trycloudflare é temporária. HTTP 202 = inbox, NÃO atribuição confirmada.",
+      "notesInFlow": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message": {
+      "main": [
+        [
+          {
+            "node": "Registrar resposta da proposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar resposta da proposta": {
+      "main": [
+        [
+          {
+            "node": "Converter resposta para API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Converter resposta para API": {
+      "main": [
+        [
+          {
+            "node": "Enviar callback ao backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar callback ao backend": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}

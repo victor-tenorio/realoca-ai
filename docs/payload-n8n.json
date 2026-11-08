@@ -1,0 +1,49 @@
+{
+  "note": "EXEMPLOS FICTICIOS. Cada objeto request_* e um body HTTP independente. IDs reais sao gerados pelo backend.",
+  "request_offer_created": {
+    "event_id": "evt-out-example",
+    "event_type": "offer.created",
+    "case_id": "case-example",
+    "attempt_id": "att-example",
+    "task_id": "task-example",
+    "task_title": "Validar relatório",
+    "estimated_hours": 2,
+    "due_at": "2026-11-09T17:00:00-03:00",
+    "candidate_employee_id": "emp-example",
+    "candidate_name": "Funcionário Demo",
+    "channel": "slack",
+    "channel_user_id": "U_DEMO_ONLY",
+    "response_deadline_at": "2026-11-09T16:30:00-03:00",
+    "message": "Você pode assumir a tarefa Validar relatório (2h)? Aceitar / Recusar."
+  },
+  "normalized_slack_accepted": {
+    "attempt_id": "att-example",
+    "decision": "accepted",
+    "responded_at": "2026-11-09T15:00:00-03:00",
+    "channel": "slack",
+    "decline_reason": null
+  },
+  "request_offer_accepted": {
+    "event_id": "evt-n8n-att-example-accepted",
+    "event_type": "offer.accepted",
+    "attempt_id": "att-example",
+    "channel": "slack",
+    "occurred_at": "2026-11-09T18:00:00.000Z",
+    "reason": null
+  },
+  "normalized_slack_declined": {
+    "attempt_id": "att-example",
+    "decision": "declined",
+    "responded_at": "2026-11-09T15:00:00-03:00",
+    "channel": "slack",
+    "decline_reason": "Indisponibilidade no horário"
+  },
+  "request_offer_refused": {
+    "event_id": "evt-n8n-att-example-refused",
+    "event_type": "offer.refused",
+    "attempt_id": "att-example",
+    "channel": "slack",
+    "occurred_at": "2026-11-09T18:00:00.000Z",
+    "reason": "Indisponibilidade no horário"
+  }
+}

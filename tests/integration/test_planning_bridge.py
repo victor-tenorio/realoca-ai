@@ -561,6 +561,16 @@ def test_v11_reminder_only_once_and_no_second_invite(scenario, monkeypatch):
     session.expire_all()
     assert _count(session, OutboundMessage) == 1
     assert session.get(CoverageAttempt, payload["attempt_id"]).status == AttemptStatus.NOTIFIED
+    # V15: the audit endpoint can reconstruct queuing, dispatch and reminder.
+    from app.services.reporting import audit_timeline
+    session.commit()  # release previous reader transaction
+    with maker() as read_session:
+        events = audit_timeline(read_session, case_id=case.case_id)["events"]
+    actions = {event["action"] for event in events}
+    assert {"offer.queued", "offer.dispatched", "alert.reminder_sent"} <= actions
+    assert all(event["case_id"] == case.case_id for event in events)
+    assert any(event["attempt_id"] == payload["attempt_id"]
+               and event["action"] == "alert.reminder_sent" for event in events)
 
 
 def test_v13_bp_notification_does_not_approve_or_dispatch(scenario, monkeypatch):

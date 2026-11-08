@@ -47,8 +47,10 @@
           "mode": "id"
         },
         "text": "={{ $json.message }}\n\ncase_id: {{ $json.case_id }}\nattempt_id: {{ $json.attempt_id }}",
-        "otherOptions": {},
-        "options": {}
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        },
+        "messageType": "text"
       },
       "id": "b19e85e3-8e17-4963-8c32-b405c6199974",
       "name": "Enviar aviso Slack",

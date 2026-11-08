@@ -134,6 +134,43 @@ def test_expiration_frees_reservation_and_replans(offer_fixture):
     assert session.get(Case, case_id).plan_version == 2
 
 
+
+
+def test_n8n_millisecond_truncated_expiry_releases_and_replans(offer_fixture):
+    """A13/A15 regression for real V2 expiry ending in .980327 -> .980Z."""
+    client, session, case_id, attempt_id, task_id, original_owner = offer_fixture
+    attempt = session.get(CoverageAttempt, attempt_id)
+    deadline = (datetime.now(UTC) - timedelta(seconds=2)).replace(microsecond=980327)
+    attempt.response_deadline_at = deadline
+    session.commit()
+    # JS Date.toISOString() strips microseconds (backend deadline .980327
+    # becomes the event time .980000) yet the server receives it after expiry.
+    event_time = deadline.replace(microsecond=980000).isoformat(timespec="milliseconds")
+    response = client.post("/api/v1/integrations/attempt-events", headers={
+        "X-Internal-Token": "test-only",
+    }, json={
+        "event_id": "event-expiry-js-ms", "event_type": "offer.expired",
+        "attempt_id": attempt_id, "channel": "slack",
+        "occurred_at": event_time, "reason": "Prazo de resposta expirado",
+    })
+    assert response.status_code == 202, response.text
+    session.expire_all()
+    event = session.get(ProcessedEvent, "event-expiry-js-ms")
+    assert event.result["status"] == "expired", event.result
+    assert session.get(CoverageAttempt, attempt_id).status == AttemptStatus.EXPIRED
+    assert session.get(CoverageAttempt, attempt_id).reservation.released_at is not None
+    assert session.get(Case, case_id).plan_version == 2
+    assert session.get(Task, task_id).assignee_employee_id == original_owner
+    replay = client.post("/api/v1/integrations/attempt-events", headers={
+        "X-Internal-Token": "test-only",
+    }, json={
+        "event_id": "event-expiry-js-ms", "event_type": "offer.expired",
+        "attempt_id": attempt_id, "channel": "slack",
+        "occurred_at": event_time, "reason": "Prazo de resposta expirado",
+    })
+    assert replay.status_code == 202 and replay.json()["duplicate"] is True
+
+
 def test_new_candidate_absence_blocks_unsafe_acceptance(offer_fixture):
     client, session, case_id, attempt_id, task_id, original_owner = offer_fixture
     attempt = session.get(CoverageAttempt, attempt_id)

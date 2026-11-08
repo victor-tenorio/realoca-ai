@@ -43,6 +43,14 @@ async function installApiFixtures(page: Page, options: { tasksStatus?: number; e
     ? route.fulfill({ status: options.tasksStatus, json: { error: { code: "DATABASE_UNAVAILABLE", message: "Consulta indisponível", details: {} } } })
     : route.fulfill({ json: options.empty ? [] : tasks }));
   await page.route("**/api/v1/teams", (route) => route.fulfill({ json: teams }));
+  await page.route("**/api/v1/dashboard", (route) => route.fulfill({ json: {
+    confirmed_absences: 0, cases_total: 0, cases_open: 0, affected_tasks: 0, affected_hours: 0,
+    planned_hours: 0, confirmed_hours: 0, completed_hours: 0, completed_tasks: 0,
+    in_progress_tasks: 0, without_confirmed_coverage: 0, affected_teams: 0,
+    refusals: 0, expirations: 0, escalations: 0, pending_bp: 0,
+  }}));
+  await page.route("**/api/v1/cases", (route) => route.fulfill({ json: { cases: [], total: 0 } }));
+  await page.route("**/api/v1/audit*", (route) => route.fulfill({ json: { events: [], total: 0 } }));
 }
 
 test("dashboard indicators, priority distribution and no unexpected errors", async ({ page }, testInfo) => {
@@ -55,7 +63,7 @@ test("dashboard indicators, priority distribution and no unexpected errors", asy
   await expect(page.locator(".metric-card").nth(1)).toContainText("3,5h");
   await expect(page.getByText("Prioridade crítica")).toBeVisible();
   await expect(page.getByText("Estados não são equivalentes")).toBeVisible();
-  await expect(page.getByText(/Indicadores de cobertura indisponíveis/)).toBeVisible();
+  await expect(page.getByText("Cobertura real dos casos")).toBeVisible();
   expect(pageErrors).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("dashboard.png"), fullPage: true });
 });
@@ -157,4 +165,19 @@ test("network errors keep dashboard demand unknown", async ({ page }) => {
   await expect(page.getByRole("alert").first()).toBeVisible();
   await expect(page.locator(".metric-card").nth(0)).toContainText("—");
   await expect(page.locator(".metric-card").nth(1)).toContainText("—");
+});
+
+
+test("real case, approval and audit views are wired to backend contracts", async ({ page }) => {
+  await installApiFixtures(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Casos de Ausência" }).click();
+  await expect(page.getByText("Casos e propostas da API")).toBeVisible();
+  await expect(page.getByText("Nenhum caso registrado até agora.")).toBeVisible();
+  await page.getByRole("button", { name: "Aprovações" }).click();
+  await expect(page.getByText("Aprovações do BP")).toBeVisible();
+  await expect(page.getByText("Nenhuma proposta aguardando decisão BP.")).toBeVisible();
+  await page.getByRole("button", { name: "Auditoria" }).click();
+  await expect(page.getByText("Trilha auditável real")).toBeVisible();
+  await expect(page.getByText("Nenhum evento encontrado para este filtro.")).toBeVisible();
 });

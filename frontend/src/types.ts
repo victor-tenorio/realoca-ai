@@ -87,3 +87,69 @@ export interface ApiErrorBody {
     details?: Record<string, unknown>;
   };
 }
+
+
+/** Read-only, authoritative responses from FastAPI A11/A17. */
+export interface CaseSummary {
+  case_id: string;
+  status: CaseStatus;
+  plan_version: number;
+  created_at: string;
+  task_count: number;
+  pending_approval_count: number;
+  escalation_count: number;
+  requires_bp_review: boolean;
+}
+export interface CaseList { cases: CaseSummary[]; total: number }
+export interface CaseProposal {
+  attempt_id: string;
+  task_id: string;
+  candidate_employee_id: string | null;
+  status: AttemptStatus;
+  reason: string | null;
+  plan_version: number;
+  approval_decision: string | null;
+  approval_actor_id: string | null;
+  response_deadline_at: string | null;
+}
+export interface CaseDetail {
+  case_id: string;
+  status: CaseStatus;
+  plan_version: number;
+  created_at: string;
+  absences: Array<{absence_id: string; employee_id: string}>;
+  tasks: Array<{task_id: string; title: string; status: TaskStatus; assignee_employee_id: string | null}>;
+  proposals: CaseProposal[];
+  pending_approvals: string[];
+  escalations: Array<{attempt_id: string; task_id: string; reason_code: string; alternatives: string[]}>;
+}
+export interface CoverageDashboard {
+  confirmed_absences: number;
+  cases_total: number;
+  cases_open: number;
+  affected_tasks: number;
+  affected_hours: number | null;
+  planned_hours: number | null;
+  confirmed_hours: number | null;
+  completed_hours: number | null;
+  completed_tasks: number;
+  in_progress_tasks: number;
+  without_confirmed_coverage: number;
+  affected_teams: number;
+  refusals: number;
+  expirations: number;
+  escalations: number;
+  pending_bp: number;
+}
+export interface AuditRecord {
+  audit_event_id: string;
+  case_id: string | null;
+  attempt_id: string | null;
+  actor: string;
+  action: string;
+  timestamp: string;
+  policy_version: number | null;
+  reason: string | null;
+  result: Record<string, unknown> | string;
+}
+export interface AuditTrailResponse { total: number; events: AuditRecord[] }

@@ -283,3 +283,30 @@ td small { margin-top: 3px; color: #93a098; font-size: 8px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+
+/* M15–M18: real backend coverage, cases, approvals and audit. */
+.live-panel { margin-top: 18px; }
+.live-panel h3 { margin: 20px 0 12px; color: #304938; font-size: 14px; }
+.live-panel .panel-heading { flex-wrap: wrap; gap: 12px; }
+.live-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin: 16px 0; }
+.live-metrics > div { min-width: 0; padding: 14px; border: 1px solid #e5ece7; border-radius: 9px; background: #f8fbf9; }
+.live-metrics small { display: block; min-height: 27px; color: #76877c; font-size: 11px; line-height: 1.3; }
+.live-metrics strong { display: block; margin-top: 7px; color: #254c35; font-size: 21px; overflow-wrap: anywhere; }
+.live-label { display: grid; gap: 6px; margin: 15px 0; max-width: 100%; color: #586f60; font-size: 11px; font-weight: 700; }
+.live-label input, .live-label select, .live-form-row input { width: 100%; max-width: 100%; min-width: 0; padding: 10px; color: #294434; border: 1px solid #d6e1d9; border-radius: 7px; background: white; font-size: 12px; }
+.live-case-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.live-empty { padding: 14px; border-radius: 7px; color: #6d8073; background: #f8faf8; font-size: 12px; }
+.live-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.live-table th, .live-table td { padding: 11px; text-align: left; border-bottom: 1px solid #eaf0eb; vertical-align: top; overflow-wrap: anywhere; }
+.live-table th { color: #526b5b; background: #f5f8f5; }
+.live-table small { display: block; margin-top: 4px; color: #88988e; font-size: 10px; }
+.live-table code { font-size: 10px; }
+.live-approval { display: grid; gap: 10px; padding: 15px 0; border-bottom: 1px solid #e5ece6; }
+.live-approval small { display: block; margin-top: 4px; color: #849487; font-size: 10px; overflow-wrap: anywhere; }
+.live-approval p { color: #627668; font-size: 11px; }
+.live-actions, .live-form-row { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; }
+.live-form-row label { flex: 1 1 190px; display: grid; gap: 5px; color: #647b6c; font-size: 11px; }
+.live-actions button { flex: 0 1 auto; }
+@media (max-width: 780px) { .live-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .live-table { min-width: 540px; } }
+@media (max-width: 420px) { .live-metrics strong { font-size: 18px; } }

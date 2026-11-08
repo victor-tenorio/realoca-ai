@@ -6,6 +6,7 @@ import type { Resource } from "./hooks/use-resource";
 import { initialSlackDemoState, respondToSlackProposal, slackScenarios } from "./slack-demo";
 import type { SlackScenarioId } from "./slack-demo";
 import { presentStatus } from "./status-presentation";
+import { ApprovalQueue, AuditTrail, CasesExplorer, CoverageMetrics } from "./LiveOperations";
 import type { AbsenceCreated, Employee, Task, Team } from "./types";
 
 type Page = "overview" | "cases" | "tasks" | "teams" | "slack" | "approvals" | "audit";
@@ -26,7 +27,7 @@ const pageTitles: Record<Page, { title: string; subtitle: string }> = {
   tasks: { title: "Tarefas", subtitle: "Consulte tarefas do turno e filtre os dados publicados pelo backend." },
   teams: { title: "Equipes e capacidade", subtitle: "Capacidade e carga calculadas pelo backend para o turno de referência." },
   slack: { title: "Simulador Slack", subtitle: "Demonstração local e fictícia de respostas a propostas; não envia mensagens." },
-  approvals: { title: "Aprovações", subtitle: "A fila será exibida quando a API disponibilizar a consulta oficial." },
+  approvals: { title: "Aprovações", subtitle: "Fila real de propostas aguardando autorização do BP na API." },
   audit: { title: "Auditoria", subtitle: "Histórico operacional somente para leitura." },
 };
 
@@ -63,7 +64,7 @@ export default function App() {
             >
               <span className="nav-icon" aria-hidden="true">{item.icon}</span>
               {item.label}
-              {item.id === "approvals" && <span className="nav-dot" aria-label="Consulta indisponível" />}
+              
             </button>
           ))}
         </nav>
@@ -95,13 +96,13 @@ export default function App() {
             {page === "overview" && <span className="live-tag"><span className="status-pulse" /> Dados atualizados sob demanda</span>}
           </div>
 
-          {page === "overview" && <Overview employees={employees} tasks={tasks} teams={teams} onRetry={() => setRefreshKey((key) => key + 1)} />}
-          {page === "cases" && <CasesPage employees={employees} />}
+          {page === "overview" && <><Overview employees={employees} tasks={tasks} teams={teams} onRetry={() => setRefreshKey((key) => key + 1)} /><CoverageMetrics refreshKey={refreshKey} /></>}
+          {page === "cases" && <CasesPage employees={employees} refreshKey={refreshKey} />}
           {page === "tasks" && <TasksPage resource={tasks} onRetry={() => setRefreshKey((key) => key + 1)} />}
           {page === "teams" && <TeamsPage resource={teams} onRetry={() => setRefreshKey((key) => key + 1)} />}
           {page === "slack" && <SlackSimulator />}
-          {page === "approvals" && <UnavailablePage kind="approvals" />}
-          {page === "audit" && <UnavailablePage kind="audit" />}
+          {page === "approvals" && <ApprovalQueue refreshKey={refreshKey} />}
+          {page === "audit" && <AuditTrail refreshKey={refreshKey} />}
         </div>
       </main>
     </div>
@@ -176,10 +177,6 @@ function Overview({ employees, tasks, teams, onRetry }: {
 
       <StatusGuide />
 
-      <div className="notice notice-neutral">
-        <span className="notice-icon" aria-hidden="true">i</span>
-        <p><strong>Indicadores de cobertura indisponíveis.</strong> A API atual ainda não expõe consultas de casos, planejamento, reservas por tentativa ou aprovações. Propostas não são apresentadas como cobertura confirmada.</p>
-      </div>
     </section>
   );
 }
@@ -305,7 +302,7 @@ function MetricCard({ label, value, detail, icon, tone }: {
   );
 }
 
-function CasesPage({ employees }: { employees: Resource<Employee[]> }) {
+function CasesPage({ employees, refreshKey }: { employees: Resource<Employee[]>; refreshKey: number }) {
   const [result, setResult] = useState<AbsenceCreated | null>(null);
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -390,13 +387,7 @@ function CasesPage({ employees }: { employees: Resource<Employee[]> }) {
           </div>
         )}
       </section>
-      <section className="panel unavailable-panel">
-        <span className="unavailable-icon" aria-hidden="true">◷</span>
-        <p className="eyebrow">CONSULTA DE CASOS</p>
-        <h2>Lista e detalhes ainda indisponíveis</h2>
-        <p>O backend atual implementa <code>POST /api/v1/absences</code>, mas não possui as rotas <code>GET /api/v1/cases</code> nem <code>GET /api/v1/cases/{"{case_id}"}</code>. A tela não simula casos ou eventos.</p>
-        {employees.status === "success" && employees.data.length === 0 && <EmptyState title="Nenhum funcionário publicado" description="O formulário ficará disponível quando a API retornar funcionários." />}
-      </section>
+      <CasesExplorer key={result?.case_id || "existing"} focusCaseId={result?.case_id} refreshKey={refreshKey} />
     </div>
   );
 }
@@ -470,21 +461,6 @@ function TeamsPage({ resource, onRetry }: { resource: Resource<Team[]>; onRetry:
               </table>
             </div>}
       <div className="notice notice-neutral table-note"><span className="notice-icon" aria-hidden="true">i</span><p>Valores nulos permanecem indisponíveis; não são convertidos em zero. Utilização pode superar 100% para carga já registrada.</p></div>
-    </section>
-  );
-}
-
-function UnavailablePage({ kind }: { kind: "approvals" | "audit" }) {
-  const isApprovals = kind === "approvals";
-  return (
-    <section className="panel unavailable-page">
-      <div className="unavailable-icon" aria-hidden="true">{isApprovals ? "✓" : "◷"}</div>
-      <p className="eyebrow">{isApprovals ? "FILA DE APROVAÇÃO" : "REGISTRO IMUTÁVEL"}</p>
-      <h2>{isApprovals ? "Consulta de aprovações não implementada" : "Consulta de auditoria não implementada"}</h2>
-      <p>{isApprovals
-        ? "Embora o contrato descreva POST de decisão BP, o backend atual não registra uma rota de consulta ou decisão de propostas. Esta página é somente informativa: não há ações fictícias."
-        : "O backend atual não expõe GET /api/v1/audit. Nenhum evento é fabricado ou editável nesta interface."}</p>
-      <span className="read-only-tag">SOMENTE LEITURA · API INDISPONÍVEL</span>
     </section>
   );
 }

@@ -1,0 +1,99 @@
+{
+  "name": "Realoca AI | Alertas operacionais Slack (TEMPLATE)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "realoca-ai-alertas-v1",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "5c3be309-18da-4841-9a6d-f9f681099b06",
+      "name": "Webhook alertas",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        200
+      ],
+      "notes": "Header Auth: X-Internal-Token = N8N_DISPATCH_TOKEN do backend",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst p = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst kinds = ['offer.reminder','bp.approval_requested','offer.delivery_escalated'];\nif (!kinds.includes(p.event_type) || p.channel !== 'slack') throw new Error('INVALID_ALERT: event_type/channel');\nfor (const key of ['event_id','case_id','attempt_id','message']) {\n  if (typeof p[key] !== 'string' || !p[key].trim() || p[key].length > 1500) throw new Error('INVALID_ALERT: '+key);\n}\nreturn [{json: {event_type:p.event_type, event_id:p.event_id, case_id:p.case_id,\n  attempt_id:p.attempt_id, message:p.message, channel:'slack'}}];"
+      },
+      "id": "42b6ee9a-80c3-447f-b4be-f026c66f9e5c",
+      "name": "Validar alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        450,
+        200
+      ],
+      "notes": "NUNCA aprova BP ou altera tarefa; apenas notifica.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "",
+          "mode": "id"
+        },
+        "text": "={{ $json.message }}\n\ncase_id: {{ $json.case_id }}\nattempt_id: {{ $json.attempt_id }}",
+        "otherOptions": {},
+        "options": {}
+      },
+      "id": "b19e85e3-8e17-4963-8c32-b405c6199974",
+      "name": "Enviar aviso Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        700,
+        200
+      ],
+      "notes": "Configure canal demo, OAuth2 real. Aviso simples, sem botoes, nao e nova oferta.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Webhook alertas": {
+      "main": [
+        [
+          {
+            "node": "Validar alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar alerta": {
+      "main": [
+        [
+          {
+            "node": "Enviar aviso Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar aviso Slack": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

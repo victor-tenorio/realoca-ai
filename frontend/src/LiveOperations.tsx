@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { api, errorMessage } from "./api";
 import type { AuditRecord, CaseDetail, CaseList, CaseProposal, CoverageDashboard } from "./types";
 import { presentStatus } from "./status-presentation";
@@ -13,7 +14,7 @@ function Time({ value }: { value: string }) {
 function Info({ error }: { error: string }) {
   return error ? <p className="inline-error" role="alert">{error}</p> : null;
 }
-function Blank({ children }: { children: React.ReactNode }) {
+function Blank({ children }: { children: ReactNode }) {
   return <p className="live-empty">{children}</p>;
 }
 const amount = (hours: number | null) => hours === null ? "Indisponível" : new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 }).format(hours) + "h";

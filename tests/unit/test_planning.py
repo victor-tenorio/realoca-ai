@@ -1,8 +1,11 @@
 from copy import deepcopy
+from decimal import Decimal
+import math
 
 import pytest
 
 from app.engine import plan_coverage, replan_coverage
+from app.engine import planning as planning_module
 from app.engine.planning import SnapshotValidationError
 
 
@@ -526,3 +529,211 @@ def test_optimizer_is_independent_of_employee_input_order(snapshot):
     snapshot["employees"].reverse()
 
     assert plan_coverage(snapshot) == forward
+
+
+def test_python_excel_global_trap_is_stable_for_plan_and_replan(snapshot):
+    before = deepcopy(snapshot)
+
+    expected = {"task-A": "emp-pedro", "task-B": "emp-carlos"}
+    result = plan_coverage(snapshot)
+    assert {item["task_id"]: item["candidate_employee_id"] for item in result["assignments"]} == expected
+    assert result["metrics"]["planned_hours"] == 4
+    _assert_planner_invariants(snapshot, result)
+
+    reordered = deepcopy(snapshot)
+    reordered["employees"].reverse()
+    reordered["tasks"].reverse()
+    assert plan_coverage(reordered) == result
+    assert replan_coverage(reordered) == result
+    assert snapshot == before
+
+
+def _three_absence_snapshot(snapshot):
+    template = deepcopy(snapshot["tasks"][0])
+    specifications = [
+        ("task-critical-python", "emp-ana", "critical", 2, ["python"], "2026-11-08T09:00:00-03:00"),
+        ("task-high-excel", "emp-bruno", "high", 1.5, ["excel"], "2026-11-08T10:00:00-03:00"),
+        ("task-high-python", "emp-clara", "high", 2, ["python"], "2026-11-08T11:00:00-03:00"),
+        ("task-medium-python", "emp-ana", "medium", 3, ["python"], "2026-11-08T12:00:00-03:00"),
+        ("task-medium-sql", "emp-bruno", "medium", 1, ["sql"], "2026-11-08T13:00:00-03:00"),
+    ]
+    tasks = []
+    for task_id, assignee, priority, hours, skills, due_at in specifications:
+        task = deepcopy(template)
+        task.update(
+            task_id=task_id, assignee_employee_id=assignee,
+            priority=priority, estimated_hours=hours,
+            required_skills=skills, due_at=due_at,
+            team_id={"emp-ana": "ops", "emp-bruno": "finance", "emp-clara": "data"}[assignee],
+        )
+        tasks.append(task)
+    return {
+        "case_id": "case-three-absences",
+        "plan_version": 7,
+        "absent_employee_ids": ["emp-ana", "emp-bruno", "emp-clara"],
+        "tasks": tasks,
+        "employees": [
+            {"employee_id": "emp-ana", "team_id": "ops", "skills": ["python"], "shift_hours": 8,
+             "committed_hours": 0, "reserved_hours": 0, "availability": "absent"},
+            {"employee_id": "emp-bruno", "team_id": "finance", "skills": ["excel"], "shift_hours": 8,
+             "committed_hours": 0, "reserved_hours": 0, "availability": "absent"},
+            {"employee_id": "emp-clara", "team_id": "data", "skills": ["sql"], "shift_hours": 8,
+             "committed_hours": 0, "reserved_hours": 0, "availability": "absent"},
+            {"employee_id": "emp-alex", "team_id": "ops", "skills": ["python"], "shift_hours": 4,
+             "committed_hours": 0, "reserved_hours": 0, "availability": "available"},
+            {"employee_id": "emp-beto", "team_id": "data", "skills": ["python"], "shift_hours": 5,
+             "committed_hours": 0, "reserved_hours": 0.5, "availability": "available"},
+            {"employee_id": "emp-luiza", "team_id": "finance", "skills": ["excel", "sql"], "shift_hours": 2,
+             "committed_hours": 0, "reserved_hours": 0.3, "availability": "available"},
+        ],
+        "exclusions": [],
+        "policies": {"max_utilization_pct": 90, "critical_requires_bp": True},
+    }
+
+
+def test_three_simultaneous_absences_are_planned_jointly(snapshot):
+    scenario = _three_absence_snapshot(snapshot)
+    before = deepcopy(scenario)
+
+    result = plan_coverage(scenario)
+
+    assert result["case_id"] == "case-three-absences"
+    assert result["plan_version"] == 7
+    assert len(scenario["absent_employee_ids"]) == 3
+    assert {item["task_id"] for item in result["assignments"]} == {
+        "task-critical-python", "task-high-excel", "task-high-python", "task-medium-python"
+    }
+    assert {item["task_id"] for item in result["uncovered"]} == {"task-medium-sql"}
+    assert all(item["candidate_employee_id"] not in scenario["absent_employee_ids"] for item in result["assignments"])
+    python_allocations = {
+        item["task_id"]: item["candidate_employee_id"]
+        for item in result["assignments"]
+        if item["task_id"] in {"task-critical-python", "task-high-python", "task-medium-python"}
+    }
+    # A first-fit greedy pass sends the critical 2h task to emp-alex (ID tie),
+    # then cannot fit the 3h task there or on emp-beto after another 2h task.
+    # The joint solution moves both 2h tasks to emp-beto and preserves emp-alex
+    # for the 3h task.
+    assert python_allocations == {
+        "task-critical-python": "emp-beto",
+        "task-high-python": "emp-beto",
+        "task-medium-python": "emp-alex",
+    }
+    assert result["metrics"] == {"demand_hours": 9.5, "planned_hours": 8.5}
+    _assert_planner_invariants(scenario, result)
+    assert scenario == before
+
+
+def test_three_absence_plan_is_deterministic_across_input_order(snapshot):
+    scenario = _three_absence_snapshot(snapshot)
+    expected = plan_coverage(scenario)
+    reordered = deepcopy(scenario)
+    reordered["tasks"].reverse()
+    reordered["employees"].reverse()
+    reordered["absent_employee_ids"].reverse()
+
+    assert plan_coverage(reordered) == expected
+    assert replan_coverage(reordered) == expected
+
+
+def test_three_absence_replan_respects_updated_task_candidate_exclusion(snapshot):
+    scenario = _three_absence_snapshot(snapshot)
+    scenario["exclusions"] = [{"task_id": "task-high-excel", "employee_id": "emp-luiza"}]
+    before = deepcopy(scenario)
+
+    result = replan_coverage(scenario)
+
+    assert all(
+        not (item["task_id"] == "task-high-excel" and item["candidate_employee_id"] == "emp-luiza")
+        for item in result["assignments"]
+    )
+    assert {item["task_id"]: item["reason_code"] for item in result["uncovered"]} == {
+        "task-high-excel": "ALL_CANDIDATES_EXCLUDED"
+    }
+    _assert_planner_invariants(scenario, result)
+    assert scenario == before
+
+
+@pytest.mark.parametrize("planner", [plan_coverage, replan_coverage])
+def test_public_uncovered_shape_has_no_invented_alternative_payload(snapshot, planner):
+    snapshot["employees"] = []
+    snapshot["tasks"] = [snapshot["tasks"][0]]
+
+    result = planner(snapshot)
+
+    assert result["uncovered"] == [{
+        "task_id": "task-A",
+        "reason_code": "NO_AVAILABLE_CANDIDATE",
+        "alternatives": [],
+    }]
+    assert set(result) == {"case_id", "plan_version", "assignments", "uncovered", "metrics"}
+
+
+def _assert_planner_invariants(snapshot, result):
+    assert result["case_id"] == snapshot["case_id"]
+    assert result["plan_version"] == snapshot["plan_version"]
+    assert set(result) == {"case_id", "plan_version", "assignments", "uncovered", "metrics"}
+    active_tasks = {task["task_id"]: task for task in snapshot["tasks"] if task.get("status") != "done"}
+    employees = {employee["employee_id"]: employee for employee in snapshot["employees"]}
+    excluded = {(item["task_id"], item["employee_id"]) for item in snapshot.get("exclusions", [])}
+    absent = set(snapshot["absent_employee_ids"])
+    assignments = result["assignments"]
+    uncovered = result["uncovered"]
+    assignment_ids = [item["task_id"] for item in assignments]
+    uncovered_ids = [item["task_id"] for item in uncovered]
+
+    assert len(assignment_ids) == len(set(assignment_ids))
+    assert len(uncovered_ids) == len(set(uncovered_ids))
+    assert set(assignment_ids).isdisjoint(uncovered_ids)
+    assert set(assignment_ids + uncovered_ids).issubset(active_tasks)
+    assert all(item["alternatives"] == [] for item in uncovered)
+    assert all("status" not in item for item in assignments)
+
+    planned_by_employee = {}
+    for assignment in assignments:
+        task = active_tasks[assignment["task_id"]]
+        employee_id = assignment["candidate_employee_id"]
+        employee = employees[employee_id]
+        assert task["transfer_allowed"] is True
+        assert employee_id not in absent
+        assert employee["availability"] == "available"
+        assert set(task["required_skills"]).issubset(employee["skills"])
+        assert (task["task_id"], employee_id) not in excluded
+        assert Decimal(str(assignment["estimated_hours"])) == Decimal(str(task["estimated_hours"]))
+        planned_by_employee[employee_id] = planned_by_employee.get(employee_id, Decimal("0")) + Decimal(str(assignment["estimated_hours"]))
+
+    utilization = Decimal(str(snapshot.get("policies", {}).get("max_utilization_pct", 90)))
+    for employee_id, task_hours in planned_by_employee.items():
+        employee = employees[employee_id]
+        effective_limit = Decimal(str(employee["shift_hours"])) * utilization / Decimal("100")
+        occupied = Decimal(str(employee["committed_hours"])) + Decimal(str(employee["reserved_hours"]))
+        assert occupied + task_hours <= effective_limit
+
+    demand = sum(Decimal(str(task["estimated_hours"])) for task in active_tasks.values())
+    planned = sum(Decimal(str(item["estimated_hours"])) for item in assignments)
+    assert Decimal(str(result["metrics"]["demand_hours"])) == demand
+    assert Decimal(str(result["metrics"]["planned_hours"])) == planned
+    assert all(math.isfinite(float(value)) and value >= 0 for value in result["metrics"].values())
+
+
+@pytest.mark.parametrize("planner", [plan_coverage, replan_coverage])
+@pytest.mark.parametrize("multi_absence", [False, True])
+def test_planning_invariants_hold_for_plan_and_replan(snapshot, planner, multi_absence):
+    scenario = _three_absence_snapshot(snapshot) if multi_absence else deepcopy(snapshot)
+    before = deepcopy(scenario)
+
+    result = planner(scenario)
+
+    _assert_planner_invariants(scenario, result)
+    assert scenario == before
+
+
+def test_search_limit_returns_a_valid_feasible_incumbent(snapshot, monkeypatch):
+    monkeypatch.setattr(planning_module, "_SEARCH_NODE_LIMIT", 1)
+    before = deepcopy(snapshot)
+
+    result = plan_coverage(snapshot)
+
+    assert len(result["assignments"]) == 2
+    _assert_planner_invariants(snapshot, result)
+    assert snapshot == before

@@ -142,9 +142,23 @@ def _candidate_options(task, employees, absent, exclusions, policies, remaining)
 def _joint_assignment(tasks, options, employees, initial_remaining, policies):
     """Bounded deterministic DFS; returns a feasible incumbent if capped."""
     remaining = dict(initial_remaining)
-    current: list[str | None] = [None] * len(tasks)
-    best = list(current)
+    # Always start with a valid feasible plan. If the node budget is reached
+    # before DFS finds a better one, the returned incumbent still respects
+    # skills and capacity and never invents a candidate.
+    best: list[str | None] = [None] * len(tasks)
+    greedy_remaining = dict(initial_remaining)
+    for index, task in enumerate(tasks):
+        hours = _as_decimal(task["estimated_hours"])
+        candidate_id = next(
+            (employee_id for employee_id in options[index]
+             if greedy_remaining[employee_id] >= hours),
+            None,
+        )
+        best[index] = candidate_id
+        if candidate_id is not None:
+            greedy_remaining[candidate_id] -= hours
     best_score = _assignment_score(best, tasks, employees, initial_remaining, policies)
+    current: list[str | None] = [None] * len(tasks)
     nodes = 0
 
     def visit(index: int) -> None:

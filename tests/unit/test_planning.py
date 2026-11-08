@@ -114,6 +114,105 @@ def test_absent_employee_is_never_a_candidate(snapshot):
     assert all(item["candidate_employee_id"] != "emp-joao" for item in result["assignments"])
 
 
+@pytest.mark.parametrize("availability", ["absent", "unavailable"])
+def test_absent_or_unavailable_employees_are_not_eligible(snapshot, availability):
+    snapshot["absent_employee_ids"] = []
+    snapshot["employees"] = [snapshot["employees"][0]]
+    snapshot["employees"][0]["availability"] = availability
+    result = plan_coverage(snapshot)
+    assert result["assignments"] == []
+    assert result["uncovered"][0]["reason_code"] == "NO_AVAILABLE_CANDIDATE"
+
+
+def test_missing_required_skill_produces_uncovered(snapshot):
+    snapshot["employees"] = [snapshot["employees"][1]]
+    result = plan_coverage(snapshot)
+    assert not any(item["task_id"] == "task-B" for item in result["assignments"])
+    uncovered = {item["task_id"]: item["reason_code"] for item in result["uncovered"]}
+    assert uncovered["task-B"] == "NO_SKILL_MATCH"
+
+
+def test_transfer_disallowed_task_is_uncovered(snapshot):
+    snapshot["tasks"][0]["transfer_allowed"] = False
+    result = plan_coverage(snapshot)
+    assert result["uncovered"][0] == {
+        "task_id": "task-A", "reason_code": "TRANSFER_NOT_ALLOWED", "alternatives": []
+    }
+
+
+def test_all_excluded_candidates_leave_task_uncovered(snapshot):
+    snapshot["exclusions"] = [
+        {"task_id": "task-A", "employee_id": "emp-carlos"},
+        {"task_id": "task-A", "employee_id": "emp-pedro"},
+    ]
+    result = plan_coverage(snapshot)
+    uncovered = {item["task_id"]: item["reason_code"] for item in result["uncovered"]}
+    assert uncovered["task-A"] == "ALL_CANDIDATES_EXCLUDED"
+
+
+def test_completed_task_is_not_redistributed(snapshot):
+    snapshot["tasks"][0]["status"] = "done"
+    result = plan_coverage(snapshot)
+    assert result["uncovered"][0]["reason_code"] == "TASK_ALREADY_DONE"
+
+
+@pytest.mark.parametrize("status", [None, [], "pending"])
+def test_invalid_task_status_fails(snapshot, status):
+    snapshot["tasks"][0]["status"] = status
+    with pytest.raises(SnapshotValidationError, match="status"):
+        plan_coverage(snapshot)
+
+
+@pytest.mark.parametrize("record", ["task", "employee"])
+def test_malformed_explicit_team_id_fails(snapshot, record):
+    collection = "tasks" if record == "task" else "employees"
+    snapshot[collection][0]["team_id"] = []
+    with pytest.raises(SnapshotValidationError, match="team_id"):
+        plan_coverage(snapshot)
+
+
+def test_same_team_candidate_preferred_when_cross_team_requires_approval(snapshot):
+    snapshot["employees"][1]["team_id"] = "other-team"
+    result = plan_coverage(snapshot)
+    first_task = next(item for item in result["assignments"] if item["task_id"] == "task-A")
+    assert first_task["candidate_employee_id"] == "emp-carlos"
+    assert "aprovação BP" not in first_task["reason"]
+
+
+def test_cross_team_candidate_remains_proposal_and_is_marked_for_approval(snapshot):
+    snapshot["employees"] = [snapshot["employees"][1]]
+    snapshot["employees"][0]["team_id"] = "other-team"
+    result = plan_coverage(snapshot)
+    proposed = next(item for item in result["assignments"] if item["task_id"] == "task-A")
+    assert proposed["candidate_employee_id"] == "emp-pedro"
+    assert "aprovação BP" in proposed["reason"]
+    assert "status" not in proposed
+
+
+def test_critical_requires_bp_is_reflected_without_claiming_acceptance(snapshot):
+    snapshot["tasks"][0]["priority"] = "critical"
+    result = plan_coverage(snapshot)
+    proposed = next(item for item in result["assignments"] if item["task_id"] == "task-A")
+    assert "aprovação BP" in proposed["reason"]
+    assert "status" not in proposed
+
+
+def test_same_team_automatic_policy_can_require_bp(snapshot):
+    snapshot["policies"]["allow_automatic_same_team"] = False
+    result = plan_coverage(snapshot)
+    proposed = next(item for item in result["assignments"] if item["task_id"] == "task-A")
+    assert "aprovação BP" in proposed["reason"]
+
+
+def test_cross_team_without_bp_requirement_is_not_marked_for_approval(snapshot):
+    snapshot["employees"][1]["team_id"] = "other-team"
+    snapshot["employees"] = [snapshot["employees"][1]]
+    snapshot["policies"]["cross_team_requires_bp"] = False
+    result = plan_coverage(snapshot)
+    proposed = next(item for item in result["assignments"] if item["task_id"] == "task-A")
+    assert "aprovação BP" not in proposed["reason"]
+
+
 @pytest.mark.parametrize("availability", [None, [], "on_leave", "Available"])
 def test_invalid_availability_fails(snapshot, availability):
     snapshot["employees"][0]["availability"] = availability

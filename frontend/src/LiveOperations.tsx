@@ -24,8 +24,7 @@ export function CoverageMetrics({ refreshKey }: { refreshKey: number }) {
   const [error, setError] = useState("");
   useEffect(() => {
     const controller = new AbortController();
-    setError("");
-    api.getDashboard(controller.signal).then(setData).catch(e => {
+    api.getDashboard(controller.signal).then(next => { setData(next); setError(""); }).catch(e => {
       if (!controller.signal.aborted) { setData(null); setError(errorMessage(e)); }
     });
     return () => controller.abort();
@@ -52,26 +51,24 @@ export function CoverageMetrics({ refreshKey }: { refreshKey: number }) {
 
 export function CasesExplorer({ focusCaseId, refreshKey }: { focusCaseId?: string | null; refreshKey: number }) {
   const [list, setList] = useState<CaseList | null>(null);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(focusCaseId || "");
   const [detail, setDetail] = useState<CaseDetail | null>(null);
   const [error, setError] = useState("");
   const [mutation, setMutation] = useState("");
   const [working, setWorking] = useState(false);
   const [tick, setTick] = useState(0);
-  useEffect(() => { if (focusCaseId) setSelectedId(focusCaseId); }, [focusCaseId]);
   useEffect(() => {
     const controller = new AbortController();
     api.listCases(controller.signal).then(data => {
-      setList(data);
+      setList(data); setError("");
       setSelectedId(current => current || focusCaseId || data.cases[0]?.case_id || "");
     }).catch(e => { if (!controller.signal.aborted) setError(errorMessage(e)); });
     return () => controller.abort();
   }, [refreshKey, tick, focusCaseId]);
   useEffect(() => {
-    if (!selectedId) { setDetail(null); return; }
+    if (!selectedId) return;
     const controller = new AbortController();
-    setDetail(null); setError("");
-    api.getCase(selectedId, controller.signal).then(setDetail)
+    api.getCase(selectedId, controller.signal).then(next => { setDetail(next); setError(""); })
       .catch(e => { if (!controller.signal.aborted) setError(errorMessage(e)); });
     return () => controller.abort();
   }, [selectedId, refreshKey, tick]);
@@ -94,7 +91,7 @@ export function CasesExplorer({ focusCaseId, refreshKey }: { focusCaseId?: strin
       {list && list.cases.length === 0 && <Blank>Nenhum caso registrado até agora.</Blank>}
       {list && list.cases.length > 0 && <>
         <label className="live-label">Selecionar caso
-          <select value={selectedId} onChange={e => { setSelectedId(e.target.value); setMutation(""); }}>
+          <select value={selectedId} onChange={e => { setSelectedId(e.target.value); setMutation(""); setDetail(null); setError(""); }}>
             {list.cases.map(row => <option key={row.case_id} value={row.case_id}>{row.case_id.slice(0, 21)} · {row.status} · {row.task_count} tarefas</option>)}
           </select>
         </label>
@@ -132,13 +129,15 @@ export function ApprovalQueue({ refreshKey }: { refreshKey: number }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    setError("");
     api.listCases(controller.signal).then(async rows => {
       const caseDetails = await Promise.all(rows.cases.filter(row => row.pending_approval_count > 0)
         .map(row => api.getCase(row.case_id, controller.signal)));
-      if (!controller.signal.aborted) setPending(caseDetails.flatMap(detail =>
-        detail.proposals.filter(proposal => proposal.status === "pending_approval")
-          .map(proposal => ({ caseId: detail.case_id, proposal }))));
+      if (!controller.signal.aborted) {
+        setError("");
+        setPending(caseDetails.flatMap(detail =>
+          detail.proposals.filter(proposal => proposal.status === "pending_approval")
+            .map(proposal => ({ caseId: detail.case_id, proposal }))));
+      }
     }).catch(e => { if (!controller.signal.aborted) { setPending(null); setError(errorMessage(e)); } });
     return () => controller.abort();
   }, [refreshKey, tick]);
@@ -185,8 +184,8 @@ export function AuditTrail({ refreshKey }: { refreshKey: number }) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    setEvents(null); setError("");
     api.getAudit(caseId.trim() || undefined, controller.signal).then(data => {
+      setError("");
       setTotal(data.total);
       setEvents([...data.events].reverse().slice(0, 100));
     }).catch(e => { if (!controller.signal.aborted) setError(errorMessage(e)); });

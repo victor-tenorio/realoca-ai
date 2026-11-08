@@ -35,9 +35,16 @@ def test_diagnosis_finds_missing_slack_candidate_without_writes(session):
     session.commit()
 
     missing = diagnose(session, case.case_id)
-    assert missing["planned_candidates"][0]["candidate_employee_id"] == emp.employee_id
-    assert missing["planned_candidates"][0]["needs_recipient_fix"]
-    assert not missing["planned_candidates"][0]["recipient_configured"]
+    # Since Slack-only candidate filtering, an employee without a recipient
+    # must be excluded; the engine must choose another eligible colleague
+    # rather than return a candidate guaranteed to fail during dispatch.
+    assert all(item["candidate_employee_id"] != emp.employee_id
+               for item in missing["planned_candidates"])
+    assert all(item["recipient_configured"] and not item["needs_recipient_fix"]
+               for item in missing["planned_candidates"])
+    assert missing["available_employees_with_slack_recipient"] == (
+        initial["available_employees_with_slack_recipient"] - 1
+    )
     assert missing["dry_run"] is True
     assert missing["database_modified"] is False
     assert session.scalar(select(func.count()).select_from(CoverageAttempt)) == 0

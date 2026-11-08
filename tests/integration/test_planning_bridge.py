@@ -526,3 +526,98 @@ def test_post_plan_http_classifies_reserves_and_prepares_outbox(scenario, monkey
         assert dispatched == [case.case_id]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_v11_reminder_only_once_and_no_second_invite(scenario, monkeypatch):
+    """A reminder is a plain Slack alert, not another offer or reservation."""
+    from app.services.operational_alerts import pending_alerts, send_once
+
+    session, case, _, _ = scenario
+    message_id, payload = _queued_offer(scenario)
+    maker = lambda: Session(session.get_bind())
+    send_queued_offer(
+        maker, message_id, url="https://n8n.test/offer",
+        token="test-only",
+        post=lambda *args, **kwargs: type("Response", (), {"status_code": 202})(),
+    )
+    attempt = session.get(CoverageAttempt, payload["attempt_id"])
+    now = datetime.now(UTC)
+    attempt.response_deadline_at = now + timedelta(minutes=2)
+    session.commit()
+    monkeypatch.setenv("N8N_ALERT_URL", "https://n8n.test/alerts")
+    monkeypatch.setenv("N8N_DISPATCH_TOKEN", "test-only")
+    alerts = []
+    def record_http(url, *, json, headers, timeout):
+        alerts.append((url, json, headers))
+        return type("Response", (), {"status_code": 202})()
+    with maker() as read_session:
+        selected = pending_alerts(read_session, now=now)
+    assert any(item["event_type"] == "offer.reminder" for item in selected)
+    assert send_once(maker, now=now, post=record_http)["sent"] == 1
+    assert send_once(maker, now=now, post=record_http)["sent"] == 0
+    assert len(alerts) == 1
+    assert alerts[0][1]["attempt_id"] == payload["attempt_id"]
+    assert alerts[0][2] == {"X-Internal-Token": "test-only"}
+    session.expire_all()
+    assert _count(session, OutboundMessage) == 1
+    assert session.get(CoverageAttempt, payload["attempt_id"]).status == AttemptStatus.NOTIFIED
+    # V15: the audit endpoint can reconstruct queuing, dispatch and reminder.
+    from app.services.reporting import audit_timeline
+    session.commit()  # release previous reader transaction
+    with maker() as read_session:
+        events = audit_timeline(read_session, case_id=case.case_id)["events"]
+    actions = {event["action"] for event in events}
+    assert {"offer.queued", "offer.dispatched", "alert.reminder_sent"} <= actions
+    assert all(event["case_id"] == case.case_id for event in events)
+    assert any(event["attempt_id"] == payload["attempt_id"]
+               and event["action"] == "alert.reminder_sent" for event in events)
+
+
+def test_v13_bp_notification_does_not_approve_or_dispatch(scenario, monkeypatch):
+    from app.services.operational_alerts import send_once
+
+    session, case, _, _ = scenario
+    attempt_id, _ = _pending_bp(scenario)
+    maker = lambda: Session(session.get_bind())
+    monkeypatch.setenv("N8N_ALERT_URL", "https://n8n.test/alerts")
+    monkeypatch.setenv("N8N_DISPATCH_TOKEN", "test-only")
+    sent = []
+    def fake_post(url, *, json, headers, timeout):
+        sent.append(json)
+        return type("Response", (), {"status_code": 200})()
+    assert send_once(maker, post=fake_post)["sent"] == 1
+    assert sent[0]["event_type"] == "bp.approval_requested"
+    assert send_once(maker, post=fake_post)["sent"] == 0
+    session.expire_all()
+    assert session.get(CoverageAttempt, attempt_id).status == AttemptStatus.PENDING_APPROVAL
+    assert session.get(CoverageAttempt, attempt_id).approval_decision is None
+    assert _count(session, OutboundMessage) == 0
+
+
+def test_v14_three_failed_dispatches_escalate_without_acceptance(scenario, monkeypatch):
+    from app.services.operational_alerts import pending_alerts
+
+    session, case, _, _ = scenario
+    message_id, payload = _queued_offer(scenario)
+    maker = lambda: Session(session.get_bind())
+    def fail_post(url, *, json, headers, timeout):
+        return type("Response", (), {"status_code": 503})()
+    for _ in range(3):
+        with pytest.raises(APIError) as exc:
+            send_queued_offer(maker, message_id, url="https://n8n.test/offer",
+                              token="test-only", post=fail_post)
+        assert exc.value.code == "N8N_DISPATCH_FAILED"
+    with pytest.raises(APIError) as exc:
+        send_queued_offer(maker, message_id, url="https://n8n.test/offer",
+                          token="test-only", post=fail_post)
+    assert exc.value.code == "DELIVERY_RETRY_EXHAUSTED"
+    with maker() as read_session:
+        selected = pending_alerts(read_session)
+    assert any(item["event_type"] == "offer.delivery_escalated" for item in selected)
+    session.expire_all()
+    assert session.get(CoverageAttempt, payload["attempt_id"]).status == AttemptStatus.RESERVED
+    assert _count(session, MessageDelivery) == 3
+    assert _count(session, TaskAssignment) == 0
+    assert session.scalar(select(AuditEvent).where(
+        AuditEvent.attempt_id == payload["attempt_id"],
+        AuditEvent.action == "offer.delivery_escalated")) is not None

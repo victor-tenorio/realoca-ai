@@ -1,4 +1,4 @@
-"""Read-only diagnosis for SLACK_RECIPIENT_MISSING after POST /plan rollback.
+r"""Read-only diagnosis for SLACK_RECIPIENT_MISSING after POST /plan rollback.
 
 From repo root:
     .\.venv\Scripts\python.exe scripts\inspect_candidate_recipients.py --case case-...

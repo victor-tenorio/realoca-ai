@@ -13,7 +13,7 @@
 - O canal fixo `#novo-canal` é somente demo: não comprova roteamento individual nem autenticação da identidade do funcionário que clicou. Sem teste com API e n8n reais, V03–V17 não estão concluídas.
 
 
-**Status:** adaptadores de validação e conversão versionados; ainda **não importados nem testados no workflow real**. O n8n da equipe já possui Webhook, Slack "Send and Wait for Response" e um Code node "Registrar resposta da proposta". Não substitua esse fluxo sem exportá-lo primeiro.
+**Status atualizado (08/11/2026):** workflow V2 foi **importado e publicado** na instância n8n Cloud da equipe, com credenciais de Webhook, Slack e callback configuradas segundo a operação. **Ainda não há comprovação E2E** de oferta real do backend, clique no Slack e decisão persistida na API. Não substitua o fluxo já publicado. Os alertas operacionais V11/V13/V14 são um workflow **auxiliar opcional**, documentado em [OPERATIONS.md](OPERATIONS.md).
 
 ## Contratos verificáveis
 - Saída real do backend: 'offer.created' com os 14 campos listados em 'docs/payload-n8n.json' e 'app/services/dispatch.py::offer_payload'.

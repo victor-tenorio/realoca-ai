@@ -13,6 +13,8 @@ from app.errors import APIError
 from app.models import CoverageAttempt, MessageDelivery, OutboundMessage
 from app.services import audit
 
+MAX_DELIVERY_ATTEMPTS = 3
+
 
 def offer_payload(message: OutboundMessage) -> dict:
     """Exact outgoing offer.created contract; no internal credential included."""
@@ -109,6 +111,11 @@ def send_queued_offer(
             ).order_by(MessageDelivery.delivery_number)))
             if any(item.sent_at is not None for item in previous):
                 return {"event_id": message.event_id, "status": "sent", "duplicate": True}
+            if len(previous) >= MAX_DELIVERY_ATTEMPTS:
+                raise APIError(409, "DELIVERY_RETRY_EXHAUSTED",
+                               "Limite de tentativas de envio excedido", {
+                                   "attempt_id": message.attempt_id,
+                               })
             if any(item.failed_at is None for item in previous):
                 raise APIError(409, "DISPATCH_IN_PROGRESS", "Oferta em envio", {})
             if message.attempt.status != AttemptStatus.RESERVED:
@@ -148,6 +155,16 @@ def send_queued_offer(
                              action="offer.send_failed", timestamp=now,
                              policy_version=message.attempt.policy_version,
                              result={"event_id": message.event_id, "error_code": error_code})
+                if delivery.delivery_number >= MAX_DELIVERY_ATTEMPTS:
+                    audit.record(session, case_id=message.attempt.case_id,
+                                 attempt_id=message.attempt_id, actor=actor,
+                                 action="offer.delivery_escalated",
+                                 timestamp=now,
+                                 policy_version=message.attempt.policy_version,
+                                 reason="Limite de 3 tentativas de entrega",
+                                 result={"event_id": message.event_id,
+                                         "error_code": error_code,
+                                         "attempts": delivery.delivery_number})
             else:
                 delivery.sent_at = now
                 message.attempt.status = AttemptStatus.NOTIFIED
@@ -178,6 +195,10 @@ def dispatch_pending(session_factory, *, case_id: str | None = None) -> dict:
             ~exists().where(
                 MessageDelivery.message_id == OutboundMessage.message_id,
                 MessageDelivery.sent_at.is_not(None),
+            ),
+            ~exists().where(
+                MessageDelivery.message_id == OutboundMessage.message_id,
+                MessageDelivery.delivery_number >= MAX_DELIVERY_ATTEMPTS,
             ),
         ).order_by(OutboundMessage.created_at, OutboundMessage.message_id)
         if case_id is not None:

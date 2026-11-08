@@ -130,17 +130,31 @@ def _normalize_snapshot(snapshot: dict) -> dict:
     data["employees"] = [_normalize_employee(employee) for employee in data["employees"]]
     _unique_ids(data["tasks"], "task_id", "tasks")
     _unique_ids(data["employees"], "employee_id", "employees")
+    _finite_total(
+        (task["estimated_hours"] for task in data["tasks"]),
+        "total estimated_hours must be finite",
+    )
     task_ids = {task["task_id"] for task in data["tasks"]}
-    missing_exclusions = set(_normalize_exclusions(data.get("exclusions", []))) - task_ids
+    employee_ids = {employee["employee_id"] for employee in data["employees"]}
+    normalized_exclusions = _normalize_exclusions(data.get("exclusions", []))
+    missing_exclusions = set(normalized_exclusions) - task_ids
     if missing_exclusions:
         raise SnapshotValidationError(f"exclusion references unknown task: {', '.join(sorted(missing_exclusions))}")
+    unknown_excluded_employees = {
+        employee_id
+        for excluded_ids in normalized_exclusions.values()
+        for employee_id in excluded_ids
+        if employee_id not in employee_ids
+    }
+    if unknown_excluded_employees:
+        raise SnapshotValidationError(
+            "exclusion references unknown employee: "
+            + ", ".join(sorted(unknown_excluded_employees))
+        )
     policies = data.get("policies", {})
     if not isinstance(policies, dict):
         raise SnapshotValidationError("policies must be a dict")
-    utilization = policies.get("max_utilization_pct", 90)
-    if not _valid_number(utilization) or utilization <= 0 or utilization > 100:
-        raise SnapshotValidationError("policies.max_utilization_pct must be greater than 0 and at most 100")
-    data["policies"] = {**policies, "max_utilization_pct": utilization}
+    data["policies"] = _normalize_policies(policies)
     data["exclusions"] = data.get("exclusions", [])
     return data
 
@@ -152,16 +166,16 @@ def _normalize_task(task: Any) -> dict:
     _required(task, ("task_id", "priority", "estimated_hours", "required_skills", "transfer_allowed"), "task")
     if not _nonempty_string(task["task_id"]):
         raise SnapshotValidationError("task_id must be a non-empty string")
-    if task["priority"] not in {"critical", "high", "medium", "low"}:
+    if not isinstance(task["priority"], str) or task["priority"] not in {"critical", "high", "medium", "low"}:
         raise SnapshotValidationError(f"invalid priority for task {task['task_id']}")
     if not _valid_number(task["estimated_hours"]) or task["estimated_hours"] <= 0:
         raise SnapshotValidationError(f"estimated_hours must be positive and finite for task {task['task_id']}")
     task["estimated_hours"] = _clean_number(task["estimated_hours"])
-    _skills(task["required_skills"], f"task {task['task_id']} required_skills")
+    task["required_skills"] = _skills(task["required_skills"], f"task {task['task_id']} required_skills")
     if not isinstance(task["transfer_allowed"], bool):
         raise SnapshotValidationError(f"transfer_allowed must be boolean for task {task['task_id']}")
-    if "due_at" in task:
-        _iso_datetime(task["due_at"], f"task {task['task_id']} due_at")
+    _required(task, ("due_at",), f"task {task['task_id']}")
+    _iso_datetime(task["due_at"], f"task {task['task_id']} due_at")
     return task
 
 
@@ -173,15 +187,19 @@ def _normalize_employee(employee: Any) -> dict:
     _required(employee, required, "employee")
     if not _nonempty_string(employee["employee_id"]):
         raise SnapshotValidationError("employee_id must be a non-empty string")
-    _skills(employee["skills"], f"employee {employee['employee_id']} skills")
+    employee["skills"] = _skills(employee["skills"], f"employee {employee['employee_id']} skills")
     if not _valid_number(employee["shift_hours"]) or employee["shift_hours"] <= 0:
         raise SnapshotValidationError(f"shift_hours must be positive and finite for employee {employee['employee_id']}")
     for field in ("committed_hours", "reserved_hours"):
         if not _valid_number(employee[field]) or employee[field] < 0:
             raise SnapshotValidationError(f"{field} must be non-negative and finite for employee {employee['employee_id']}")
         employee[field] = _clean_number(employee[field])
+    _finite_total(
+        (employee["committed_hours"], employee["reserved_hours"]),
+        f"combined committed and reserved hours must be finite for employee {employee['employee_id']}",
+    )
     employee["shift_hours"] = _clean_number(employee["shift_hours"])
-    if employee["availability"] not in {"available", "absent", "unavailable"}:
+    if not isinstance(employee["availability"], str) or employee["availability"] not in {"available", "absent", "unavailable"}:
         raise SnapshotValidationError(f"invalid availability for employee {employee['employee_id']}")
     return employee
 
@@ -190,18 +208,54 @@ def _normalize_exclusions(exclusions: Any) -> dict[str, set[str]]:
     if not isinstance(exclusions, list):
         raise SnapshotValidationError("exclusions must be a list")
     result: dict[str, set[str]] = {}
+    seen: set[tuple[str, str]] = set()
     for item in exclusions:
         if not isinstance(item, dict) or not _nonempty_string(item.get("task_id")) or not _nonempty_string(item.get("employee_id")):
             raise SnapshotValidationError("each exclusion must contain task_id and employee_id strings")
+        pair = (item["task_id"], item["employee_id"])
+        if pair in seen:
+            raise SnapshotValidationError(f"duplicate exclusion for task {pair[0]} and employee {pair[1]}")
+        seen.add(pair)
         result.setdefault(item["task_id"], set()).add(item["employee_id"])
     return result
 
 
-def _skills(value: Any, label: str) -> None:
+def _skills(value: Any, label: str) -> list[str]:
     if not isinstance(value, list) or any(not _nonempty_string(skill) for skill in value):
         raise SnapshotValidationError(f"{label} must be a list of non-empty strings")
-    if len(value) != len(set(value)):
+    normalized = [skill.strip() for skill in value]
+    if len(normalized) != len(set(normalized)):
         raise SnapshotValidationError(f"{label} contains duplicate skills")
+    return normalized
+
+
+def _normalize_policies(policies: dict) -> dict:
+    normalized = dict(policies)
+    utilization = normalized.get("max_utilization_pct", 90)
+    if not _valid_number(utilization) or utilization <= 0 or utilization > 100:
+        raise SnapshotValidationError("policies.max_utilization_pct must be greater than 0 and at most 100")
+    normalized["max_utilization_pct"] = _clean_number(utilization)
+
+    boolean_fields = ("critical_requires_bp", "cross_team_requires_bp", "allow_automatic_same_team")
+    for field in boolean_fields:
+        if field in normalized and not isinstance(normalized[field], bool):
+            raise SnapshotValidationError(f"policies.{field} must be a boolean")
+
+    integer_fields = ("response_timeout_minutes", "reminder_before_expiry_minutes")
+    for field in integer_fields:
+        if field in normalized:
+            value = normalized[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise SnapshotValidationError(f"policies.{field} must be a positive integer")
+    if (
+        "response_timeout_minutes" in normalized
+        and "reminder_before_expiry_minutes" in normalized
+        and normalized["reminder_before_expiry_minutes"] > normalized["response_timeout_minutes"]
+    ):
+        raise SnapshotValidationError(
+            "policies.reminder_before_expiry_minutes cannot exceed response_timeout_minutes"
+        )
+    return normalized
 
 
 def _iso_datetime(value: Any, label: str) -> None:
@@ -236,8 +290,30 @@ def _nonempty_string(value: Any) -> bool:
 
 
 def _valid_number(value: Any) -> bool:
-    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _clean_number(value: int | float) -> int | float:
-    return int(value) if isinstance(value, float) and value.is_integer() else value
+    if isinstance(value, float) and value.is_integer():
+        normalized = int(value)
+        try:
+            if math.isfinite(normalized):
+                return normalized
+        except OverflowError:
+            pass
+    return value
+
+
+def _finite_total(values, message: str) -> float:
+    try:
+        total = math.fsum(values)
+    except OverflowError as exc:
+        raise SnapshotValidationError(message) from exc
+    if not math.isfinite(total):
+        raise SnapshotValidationError(message)
+    return total

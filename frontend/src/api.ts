@@ -2,6 +2,10 @@ import type {
   AbsenceCreate,
   AbsenceCreated,
   ApiErrorBody,
+  AuditTrailResponse,
+  CaseDetail,
+  CaseList,
+  CoverageDashboard,
   Employee,
   Task,
   Team,
@@ -63,6 +67,28 @@ export const api = {
   },
   listTeams(signal?: AbortSignal) {
     return request<Team[]>("/teams", { signal });
+  },
+  listCases(signal?: AbortSignal) {
+    return request<CaseList>("/cases", { signal });
+  },
+  getCase(caseId: string, signal?: AbortSignal) {
+    return request<CaseDetail>("/cases/" + encodeURIComponent(caseId), { signal });
+  },
+  planCase(caseId: string) {
+    return request<Record<string, unknown>>("/cases/" + encodeURIComponent(caseId) + "/plan", { method: "POST" });
+  },
+  getDashboard(signal?: AbortSignal) {
+    return request<CoverageDashboard>("/dashboard", { signal });
+  },
+  getAudit(caseId?: string, signal?: AbortSignal) {
+    const filter = caseId ? "?case_id=" + encodeURIComponent(caseId) : "";
+    return request<AuditTrailResponse>("/audit" + filter, { signal });
+  },
+  decideApproval(attemptId: string, decision: "approve" | "reject", actorId: string, reason: string) {
+    return request<Record<string, unknown>>("/proposals/" + encodeURIComponent(attemptId) + "/approval", {
+      method: "POST",
+      body: JSON.stringify({ decision, actor_id: actorId, reason }),
+    });
   },
   createAbsence(payload: AbsenceCreate) {
     return request<AbsenceCreated>("/absences", {

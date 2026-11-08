@@ -1,0 +1,256 @@
+{
+  "timestamp": "2026-11-08T14:04:27.157Z",
+  "computer": "Amanda",
+  "base": "https://syntax-champagne-instrument-browsers.trycloudflare.com",
+  "backend": "https://syntax-champagne-instrument-browsers.trycloudflare.com",
+  "http": [
+    {
+      "path": "/health",
+      "backendStatus": 200,
+      "shape": "object",
+      "keys": [
+        "status"
+      ]
+    },
+    {
+      "path": "/api/v1/employees",
+      "backendStatus": 422,
+      "shape": "object",
+      "keys": [
+        "error"
+      ],
+      "proxyStatus": 422
+    },
+    {
+      "path": "/api/v1/tasks",
+      "backendStatus": 200,
+      "shape": "array",
+      "count": 187,
+      "keys": [
+        "task_id",
+        "title",
+        "assignee_employee_id",
+        "team_id",
+        "priority",
+        "due_at",
+        "estimated_hours",
+        "required_skills",
+        "status",
+        "transfer_allowed",
+        "source_system",
+        "external_id",
+        "updated_at"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/teams",
+      "backendStatus": 200,
+      "shape": "array",
+      "count": 4,
+      "keys": [
+        "team_id",
+        "name",
+        "reference_date",
+        "employee_count",
+        "shift_hours",
+        "committed_hours",
+        "reserved_hours",
+        "occupied_hours",
+        "utilization_pct",
+        "complete"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/cases",
+      "backendStatus": 200,
+      "shape": "object",
+      "count": 2,
+      "keys": [
+        "cases",
+        "total"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/dashboard",
+      "backendStatus": 200,
+      "shape": "object",
+      "keys": [
+        "confirmed_absences",
+        "cases_total",
+        "cases_open",
+        "affected_tasks",
+        "affected_hours",
+        "planned_hours",
+        "confirmed_hours",
+        "completed_hours",
+        "completed_tasks",
+        "in_progress_tasks",
+        "without_confirmed_coverage",
+        "affected_teams",
+        "refusals",
+        "expirations",
+        "escalations",
+        "pending_bp"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/audit",
+      "backendStatus": 200,
+      "shape": "object",
+      "count": 47,
+      "keys": [
+        "total",
+        "events"
+      ],
+      "proxyStatus": 200
+    }
+  ],
+  "pages": [
+    {
+      "tab": "Visão Geral",
+      "heading": "Cobertura real dos casos",
+      "screenshot": "01-visao-geral.png",
+      "passed": true
+    },
+    {
+      "tab": "Casos de Ausência",
+      "heading": "Casos e propostas da API",
+      "screenshot": "02-casos.png",
+      "passed": true
+    },
+    {
+      "tab": "Tarefas",
+      "heading": "Tarefas do turno",
+      "screenshot": "03-tarefas.png",
+      "passed": true
+    },
+    {
+      "tab": "Equipes e Capacidade",
+      "heading": "Capacidade por equipe",
+      "screenshot": "04-equipes.png",
+      "passed": true
+    },
+    {
+      "tab": "Aprovações",
+      "heading": "Aprovações do BP",
+      "screenshot": "05-aprovacoes.png",
+      "passed": true
+    },
+    {
+      "tab": "Auditoria",
+      "heading": "Trilha auditável real",
+      "screenshot": "06-auditoria.png",
+      "passed": true
+    }
+  ],
+  "consoleErrors": [
+    {
+      "message": "Failed to load resource: the server responded with a status of 422 ()",
+      "url": "https://syntax-champagne-instrument-browsers.trycloudflare.com/api/v1/employees"
+    }
+  ],
+  "pageErrors": [],
+  "failedRequests": [
+    {
+      "url": "https://syntax-champagne-instrument-browsers.trycloudflare.com/api/v1/audit",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    }
+  ],
+  "mutations": [],
+  "tls": {
+    "issuer": "WE1",
+    "protocol": "TLS 1.3",
+    "subjectName": "trycloudflare.com",
+    "validFrom": 1791233913,
+    "validTo": 1799013500
+  },
+  "dashboard": {
+    "confirmed_absences": 2,
+    "cases_total": 2,
+    "cases_open": 2,
+    "affected_tasks": 10,
+    "affected_hours": 11,
+    "planned_hours": 11,
+    "confirmed_hours": 1,
+    "completed_hours": 0,
+    "completed_tasks": 0,
+    "in_progress_tasks": 5,
+    "without_confirmed_coverage": 9,
+    "affected_teams": 2,
+    "refusals": 1,
+    "expirations": 1,
+    "escalations": 0,
+    "pending_bp": 0
+  },
+  "simulator": "Local acceptance only; no API mutation",
+  "blockedWrites": [
+    {
+      "path": "/api/v1/absences",
+      "status": 405
+    },
+    {
+      "path": "/api/v1/cases/case-5c3d64a2-c22a-4f92-b2af-25109f4f053c/plan",
+      "status": 405
+    },
+    {
+      "path": "/api/v1/proposals/unknown/approval",
+      "status": 405
+    },
+    {
+      "path": "/integrations/n8n/events",
+      "status": 405
+    }
+  ],
+  "blockedPaths": [
+    {
+      "path": "/docs",
+      "status": 404
+    },
+    {
+      "path": "/openapi.json",
+      "status": 404
+    },
+    {
+      "path": "/redoc",
+      "status": 404
+    },
+    {
+      "path": "/.env",
+      "status": 404
+    },
+    {
+      "path": "/realoca.db",
+      "status": 404
+    },
+    {
+      "path": "/.public-demo/snapshot.db",
+      "status": 404
+    },
+    {
+      "path": "/api/v1/policies",
+      "status": 404
+    },
+    {
+      "path": "/integrations/n8n/events",
+      "status": 404
+    },
+    {
+      "path": "/src/main.tsx",
+      "status": 404
+    }
+  ],
+  "secretCheck": "No credential values or Slack token/private-key patterns in audit or HTML; internal paths blocked",
+  "expectedConsoleErrors": [
+    {
+      "message": "Failed to load resource: the server responded with a status of 422 ()",
+      "url": "https://syntax-champagne-instrument-browsers.trycloudflare.com/api/v1/employees"
+    }
+  ],
+  "passed": true
+}

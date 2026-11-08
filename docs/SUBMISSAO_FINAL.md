@@ -9,16 +9,18 @@ recusas, replanejamentos e cobertura em uma trilha auditável.
 
 Repositório: https://github.com/victor-tenorio/realoca-ai
 
-Frontend da demonstração: http://localhost:5173
+**Demo pública HTTPS para a banca:** https://syntax-champagne-instrument-browsers.trycloudflare.com
+
+Frontend da demonstração original local: http://localhost:5173
 
 API local: http://127.0.0.1:8001 — documentação: http://127.0.0.1:8001/docs
 
 As URLs locais funcionam no computador AMANDA, que executa os servidores.
 Em outro computador, `localhost` aponta para esse outro computador. As capturas
-neste repositório documentam a demo; não existe hospedagem pública validada nesta
-entrega. Para uma demonstração remota, compartilhe a tela da máquina AMANDA ou
-utilize acesso remoto autenticado; a API não deve ser exposta publicamente sem
-autenticação.
+neste repositório documentam a demo. O link HTTPS acima usa Cloudflare Quick
+Tunnel e serve uma instância isolada, somente leitura, com cópia consistente do
+banco sintético. O computador AMANDA, a internet e os processos da demo pública
+precisam permanecer ativos. Reiniciar o túnel gera outro endereço temporário.
 
 ## Arquitetura e diferencial dos agentes
 
@@ -57,6 +59,36 @@ O [roteiro detalhado](demo-historico-validado.md) explica as tentativas e os
 limites da evidência. Nenhum convite precisa ser reenviado para demonstrar o fluxo.
 
 ## Evidências da execução real
+
+### Validação da URL pública
+
+Playwright com Chrome local acessou o endereço HTTPS público pela Cloudflare
+em 08/11/2026 às 11:04 (São Paulo), sem mocks nem exceção de certificado:
+HTTP 200, TLS 1.3 e certificado para `trycloudflare.com` (emissor WE1).
+As seis abas passaram e o Simulador Slack aceitou uma proposta fictícia apenas
+no estado local, sem nenhuma requisição de escrita pela interface.
+
+O caso de recusa/replanejamento exibiu os 21 eventos históricos. A cópia e o
+original conservaram os mesmos dois casos, 12 tentativas e 47 eventos globais.
+POSTs de ausência, planejamento, aprovação e integração foram bloqueados com
+HTTP 405 (`PUBLIC_DEMO_READ_ONLY`). Rotas administrativas, documentação da API,
+`.env`, SQLite e fontes TypeScript responderam 404. A conexão SQLite da API
+também recusou uma instrução de escrita sem linhas afetadas por estar em
+`mode=ro`. O processo isolado remove as variáveis n8n/Slack antes de iniciar.
+
+[Relatório HTTPS público e bloqueios](evidencias-publicas/smoke-real.json).
+Capturas públicas: [Visão Geral](evidencias-publicas/01-visao-geral.png),
+[Casos](evidencias-publicas/02-casos.png), [Tarefas](evidencias-publicas/03-tarefas.png),
+[Equipes](evidencias-publicas/04-equipes.png), [Aprovações](evidencias-publicas/05-aprovacoes.png),
+[Auditoria](evidencias-publicas/06-auditoria.png) e
+[Simulador local](evidencias-publicas/07-simulador-local.png).
+
+O teste usa o endereço público pela internet a partir da máquina AMANDA;
+não representa uma checagem manual de um segundo computador. Uma tentativa
+adicional pelo serviço de navegação externo não conseguiu acessar a URL.
+A validação concluída é a do Chrome/Playwright por HTTPS público.
+
+### Validação da instância original
 
 Validação local com Playwright/Chrome em 08/11/2026, sem mocks, conectada ao
 FastAPI existente na porta 8001. As seis abas passaram; não houve exceções
@@ -104,6 +136,33 @@ após reiniciar o Windows, execute novamente o script.
 Para repetir somente a verificação de leitura: em `frontend/`, execute
 `node scripts/smoke-real.mjs` com Chrome instalado e ambos os servidores ativos.
 
+### Reiniciar apenas a demo pública
+
+Na raiz: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_public_demo.ps1`.
+O script cria o snapshot por backup SQLite somente se ele ainda não existir;
+nunca sobrescreve o original, executa seed ou migrações. A API isolada roda em
+`127.0.0.1:8002`, serve o frontend compilado de `frontend/dist` e expõe somente
+consultas permitidas. O túnel publica essa porta na mesma origem HTTPS: o Vite
+não é exposto e sua lista de hosts permanece inalterada.
+
+É necessário ter dependências instaladas, `frontend/dist` compilado e
+`cloudflared` no PATH. Os processos são independentes do terminal que iniciou
+o script; arquivos locais de estado e logs ficam em `.public-demo/`, ignorada
+pelo Git. A URL atual fica em `.public-demo/url.txt`; se ela mudar, atualize o
+formulário do desafio. A reexecução reutiliza os serviços públicos ativos e
+confere `/health` por HTTPS. Não desligue o computador ou sua internet durante
+a avaliação. Quick Tunnel não garante permanência nem disponibilidade.
+
+Para repetir o teste remoto no PowerShell dentro de `frontend/`:
+
+```powershell
+$env:REALOCA_DEMO_URL = 'https://syntax-champagne-instrument-browsers.trycloudflare.com'
+node scripts/smoke-real.mjs
+```
+
+O modo HTTPS inclui testes negativos de POST na instância pública; nunca aponta
+essas escritas de teste para as portas originais 5173/8001.
+
 ## Limitações transparentes
 
 - Dados de pessoas/tarefas são sintéticos da demo, mas casos, tentativas e eventos
@@ -122,12 +181,13 @@ Para repetir somente a verificação de leitura: em `frontend/`, execute
   entrega ou aceite. O histórico comprova a recusa e o replanejamento.
 - O Simulador Slack é local e fictício, rotulado como tal; não é evidência da
   integração real. Para a banca, use a auditoria persistida.
-- Autenticação corporativa, operação em produção e implantação pública não foram
-  validadas. Segredos, banco local e logs não fazem parte do commit.
+- Autenticação corporativa e operação em produção não foram validadas. O acesso
+  público é limitado à leitura de dados sintéticos. Segredos, banco local,
+  snapshot e logs não fazem parte do commit.
 
 ## Envio ao desafio
 
-Use este texto, o link do repositório e as seis capturas no formulário oficial.
+Use este texto, o link HTTPS público, o repositório e as capturas no formulário oficial.
 Caso o formulário exija vídeo, grave a sequência de leitura acima e anexe o link
 conforme o requisito do evento. Confirme os campos obrigatórios, os integrantes
 e conclua o envio no portal até 13h de 08/11/2026 (São Paulo).

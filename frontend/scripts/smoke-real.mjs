@@ -5,12 +5,13 @@ import { resolve } from 'node:path';
 import os from 'node:os';
 import process from 'node:process';
 
-const base = 'http://localhost:5173';
+const base = process.env.REALOCA_DEMO_URL || 'http://localhost:5173';
+const isPublic = base.startsWith('https://');
 const caseId = 'case-5c3d64a2-c22a-4f92-b2af-25109f4f053c';
-const output = resolve(import.meta.dirname, '../../docs/evidencias');
+const output = resolve(import.meta.dirname, isPublic ? '../../docs/evidencias-publicas' : '../../docs/evidencias');
 await mkdir(output, { recursive: true });
 const report = { timestamp: new Date().toISOString(), computer: os.hostname(), base,
-  backend: 'http://127.0.0.1:8001', http: [], pages: [], consoleErrors: [], pageErrors: [], failedRequests: [], mutations: [] };
+  backend: isPublic ? base : 'http://127.0.0.1:8001', http: [], pages: [], consoleErrors: [], pageErrors: [], failedRequests: [], mutations: [] };
 const browser = await chromium.launch({ channel: 'chrome' });
 try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });
@@ -34,7 +35,14 @@ try {
     }
     report.http.push(row);
   }
-  await page.goto(base);
+  const navigation = await page.goto(base);
+  expect(navigation.status()).toBe(200);
+  if (isPublic) {
+    expect(navigation.headers()['x-realoca-mode']).toBe('public-read-only');
+    report.tls = await navigation.securityDetails();
+    expect(report.tls).not.toBeNull();
+    await expect(page.getByText(/DEMO PÚBLICA · SOMENTE LEITURA/)).toBeVisible();
+  }
   await expect(page.getByText('Dados legados incompletos de funcionários.', { exact: true })).toBeVisible();
   await expect(page.getByText('Horas confirmadas', { exact: true })).toBeVisible();
   await expect(page.locator('.metric-card').filter({ hasText: 'Funcionários publicados' }).locator('.metric-value')).toHaveText('—');
@@ -72,6 +80,34 @@ try {
     report.pages.push({ tab, heading, screenshot: `${file}.png`, passed: true });
   }
   report.dashboard = await (await context.request.get(base + '/api/v1/dashboard')).json();
+  if (isPublic) {
+    await page.getByRole('navigation').getByRole('button', { name: /Simulador Slack/ }).click();
+    await expect(page.getByText(/SIMULAÇÃO LOCAL · DADOS FICTÍCIOS/)).toBeVisible();
+    await page.getByRole('button', { name: 'Aceitar · simulação' }).click();
+    await expect(page.getByText('Aceite fictício registrado', { exact: true })).toBeVisible();
+    await page.screenshot({ path: resolve(output, '07-simulador-local.png'), fullPage: true });
+    report.simulator = 'Local acceptance only; no API mutation';
+    report.blockedWrites = [];
+    for (const path of ['/api/v1/absences', `/api/v1/cases/${caseId}/plan`, '/api/v1/proposals/unknown/approval', '/integrations/n8n/events']) {
+      const response = await context.request.post(base + path, { data: {} });
+      expect(response.status()).toBe(405);
+      expect((await response.json()).error.code).toBe('PUBLIC_DEMO_READ_ONLY');
+      report.blockedWrites.push({ path, status: response.status() });
+    }
+    report.blockedPaths = [];
+    for (const path of ['/docs', '/openapi.json', '/redoc', '/.env', '/realoca.db', '/.public-demo/snapshot.db', '/api/v1/policies', '/integrations/n8n/events', '/src/main.tsx']) {
+      const response = await context.request.get(base + path);
+      expect(response.status()).toBe(404);
+      report.blockedPaths.push({ path, status: response.status() });
+    }
+    expect(await (await context.request.get(base + '/api/v1/dashboard')).json()).toEqual(report.dashboard);
+    // Compare responses with credential values without writing any values to evidence.
+    const secrets = Object.entries(process.env).filter(([key, value]) => /^(N8N|SLACK)_/.test(key) && /TOKEN|SECRET|KEY/.test(key) && value.length > 8).map(([, value]) => value);
+    const exposed = await (await context.request.get(base + '/api/v1/audit')).text() + await page.content();
+    expect(secrets.some(secret => exposed.includes(secret))).toBe(false);
+    expect(/xox[baprs]-[a-zA-Z0-9-]{10,}|-----BEGIN .*PRIVATE KEY-----/.test(exposed)).toBe(false);
+    report.secretCheck = 'No credential values or Slack token/private-key patterns in audit or HTML; internal paths blocked';
+  }
   expect(report.pageErrors).toEqual([]);
   expect(report.mutations).toEqual([]);
   report.expectedConsoleErrors = report.consoleErrors.filter(item => item.url.endsWith('/api/v1/employees') && /422/.test(item.message));

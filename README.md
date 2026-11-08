@@ -147,3 +147,61 @@ Veja [exemplos reais das respostas](docs/query-response-examples.md), obtidos em
 banco temporário. Ruff foi usado como ferramenta local de verificação, sem
 adicionar dependências de execução; para repetir seus checks em outro ambiente,
 instale-o explicitamente com `python -m pip install ruff`.
+
+## Registrar ausência confirmada
+
+Antes de iniciar a API, aplique a nova migração incremental:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+Em outro PowerShell, use um funcionário real do seed e os campos exatos do contrato:
+
+```powershell
+$body = @'
+{
+  "employee_id": "demo-atendimento-01",
+  "starts_at": "2026-11-08T08:00:00-03:00",
+  "ends_at": "2026-11-08T18:00:00-03:00",
+  "confirmed": true,
+  "source_system": "hr_simulator",
+  "external_id": "absence-hr-001"
+}
+'@
+$result = Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8000/api/v1/absences -ContentType "application/json; charset=utf-8" -Body $body
+$result | ConvertTo-Json
+```
+
+Nova ocorrência: HTTP **201**, por exemplo (IDs gerados variam):
+
+```json
+{"absence_id":"abs-<uuid>","case_id":"case-<uuid>","status":"open"}
+```
+
+Reenviar exatamente a mesma ocorrência retorna **200** com os mesmos IDs, sem
+duplicar auditoria ou vínculos. O escopo da chave é `(source_system, external_id)`.
+Reutilizar a chave com conteúdo diferente ou informar outra ocorrência
+sobreposta retorna **409**, incluindo `case_id` existente nos detalhes quando
+houver vínculo. Intervalos são `[início, fim)`: períodos adjacentes são permitidos.
+`confirmed=false` retorna 422; não existe uma rota separada de confirmação.
+Datas devem conter fuso e o funcionário deve existir. Campos extras, inclusive
+diagnóstico/causa médica, são rejeitados. Não há token n8n exigido nessa rota.
+
+A ausência, o caso, as tarefas afetadas e a auditoria são gravados atomicamente.
+Apenas tarefas abertas do funcionário no turno de referência intersectado são
+vinculadas; o responsável e a carga permanecem intactos. Sem tarefas registradas,
+o caso continua `open`, sem alegar cobertura confirmada. Consulte as decisões em
+[docs/spec.md](docs/spec.md). O Swagger em `/docs` também documenta a operação.
+
+A revisão `b07c91d42e36` adiciona proteções de sobreposição no SQLite e permite
+auditoria sem política aplicada para os eventos dessa operação, preservando o
+histórico existente. Seu downgrade é bloqueado se houver novos eventos com
+política não aplicável, pois a revisão anterior não consegue representá-los sem
+perda ou adulteração. Não execute downgrade destrutivo no banco de desenvolvimento.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_absences.py -q
+.\.venv\Scripts\python.exe -m pytest -q
+```

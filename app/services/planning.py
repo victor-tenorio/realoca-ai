@@ -3,14 +3,14 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.engine import plan_coverage
 from app.enums import ACTIVE_ATTEMPT_STATUSES, AttemptStatus, CaseStatus
 from app.errors import APIError
 from app.models import Case, CoverageAttempt, CoveragePlan, PolicyVersion
-from app.services import audit, cases, snapshot
+from app.services import audit, cases, dispatch, reservations, snapshot
 
 
 def _validate_engine_result(result: dict, inputs: dict) -> None:
@@ -127,3 +127,53 @@ def create_plan(
         ],
         "uncovered": result["uncovered"], "metrics": result["metrics"],
     }
+
+
+def plan_and_authorize(session: Session, case_id: str, *, actor: str) -> dict:
+    """HTTP orchestration: propose, classify, reserve auto or await BP.
+
+    All persisted changes (and the offer outbox) share one writer-locked
+    transaction. Delivery is a later side effect from the durable outbox.
+    """
+    with session.begin():
+        if session.get_bind().dialect.name == "sqlite":
+            session.execute(text("BEGIN IMMEDIATE"))
+        case = session.get(Case, case_id)
+        if case is None:
+            raise APIError(404, "CASE_NOT_FOUND", "Caso não encontrado", {})
+        if session.scalar(select(PolicyVersion.policy_version).limit(1)) is None:
+            # The demo's policy is a real versioned row, not a mutable total.
+            session.add(PolicyVersion(policy_version=1, created_at=datetime.now(UTC)))
+            session.flush()
+        result = create_plan(session, case, actor=actor)
+        enriched = []
+        for proposal in result["proposals"]:
+            attempt = session.get(CoverageAttempt, proposal["attempt_id"])
+            try:
+                reservations.reserve_locked(session, attempt, actor=actor)
+            except APIError as exc:
+                if exc.code != "BP_APPROVAL_REQUIRED":
+                    raise
+                attempt.status = AttemptStatus.PENDING_APPROVAL
+                audit.record(session, case_id=case.case_id,
+                             attempt_id=attempt.attempt_id, actor=actor,
+                             action="proposal.pending_approval",
+                             timestamp=datetime.now(UTC),
+                             policy_version=attempt.policy_version,
+                             result={"reason_code": exc.details["reason_code"]})
+                cases.recalculate_case_status(session, case, actor=actor,
+                                              reason="Aguardando decisão BP")
+                policy_action = "needs_approval"
+            else:
+                dispatch.queue_offer(session, attempt, actor=actor)
+                policy_action = "auto"
+            enriched.append({
+                "attempt_id": attempt.attempt_id, "task_id": attempt.task_id,
+                "candidate_employee_id": attempt.candidate_employee_id,
+                "policy_action": policy_action, "status": attempt.status.value,
+                "reason": proposal["reason"],
+            })
+        session.flush()
+        return {"case_id": result["case_id"], "plan_id": result["plan_id"],
+                "plan_version": result["plan_version"],
+                "proposals": enriched, "uncovered": result["uncovered"]}

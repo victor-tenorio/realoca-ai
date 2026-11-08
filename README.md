@@ -70,8 +70,9 @@ cria casos, políticas ou mensagens automaticamente. Políticas novas usam os
 defaults oficiais, com versões preservadas para decisões históricas.
 
 Auditoria append-only, FKs e unicidade de tentativa ativa são garantias do banco
-SQLite migrado. Eventos têm armazenamento de resultado anterior, mas o consumidor
-idempotente, as transições, a aprovação/aceite e o envio ainda não existem.
+SQLite migrado. Eventos têm armazenamento de resultado anterior. O receptor HTTP
+idempotente está descrito abaixo; processamento das transições, a aprovação/aceite
+e o envio ainda não existem.
 Reservas agora são persistidas e entram no cálculo de capacidade; sua criação,
 liberação e conversão permanecem para os serviços futuros. Veja os detalhes em
 [docs/spec.md](docs/spec.md). Os mesmos comandos de instalação e inicialização
@@ -205,3 +206,34 @@ perda ou adulteração. Não execute downgrade destrutivo no banco de desenvolvi
 .\.venv\Scripts\python.exe -m pytest tests/integration/test_absences.py -q
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+## Endpoint de callbacks do n8n (A13)
+
+Configure `INTEGRATIONS_INTERNAL_TOKEN` como segredo no ambiente do backend.
+Sem esse segredo, o endpoint falha fechado (`503`); chamadas sem o header
+`X-Internal-Token` correto retornam `401`.
+
+`POST /api/v1/integrations/attempt-events` recebe o contrato interno:
+
+```json
+{
+  "event_id": "evt-001",
+  "event_type": "offer.refused",
+  "attempt_id": "att-001",
+  "channel": "slack",
+  "occurred_at": "2026-11-08T08:05:00-03:00",
+  "reason": null
+}
+```
+
+Resposta `202`: `{ "event_id": "evt-001", "status": "queued", "duplicate": false }`.
+Repetição **idêntica** retorna `duplicate: true`, sem novo registro; colisão
+de ID ou decisão concorrente retorna `409`. Também são validados existência e
+estado pendente da tentativa, prazo, fuso horário e uma oferta real (não simulada)
+no canal informado. Eventos de expiração exigem prazo encerrado.
+
+**Limite importante:** `queued` significa que o evento foi persistido na inbox
+`processed_events`, **não** que a pessoa já foi alocada ou que a decisão foi
+aplicada. A transição com verificação de capacidade/política, liberação de reserva,
+atribuição e auditoria pertence ao processador de negócios posterior. O n8n deve
+enviar o payload no formato contratado (o JSON de saída dos botões, sozinho, ainda
+não é uma chamada a este endpoint). Execute `pytest -q` para os testes HTTP e gerais.

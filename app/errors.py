@@ -38,7 +38,9 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError):
-        return error_response(400, "INVALID_REQUEST", "Parâmetros inválidos")
+        # Preserve the callback contract (422) while the RH endpoints use 400.
+        status = 422 if request.url.path == "/api/v1/integrations/attempt-events" else 400
+        return error_response(status, "INVALID_REQUEST", "Parâmetros inválidos")
 
     @app.exception_handler(HTTPException)
     async def http_error(request: Request, exc: HTTPException):

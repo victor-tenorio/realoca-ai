@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { api, errorMessage } from "./api";
+import { ApiError, api, errorMessage } from "./api";
 import { useResource } from "./hooks/use-resource";
 import type { Resource } from "./hooks/use-resource";
 import { initialSlackDemoState, respondToSlackProposal, slackScenarios } from "./slack-demo";
@@ -97,7 +97,7 @@ export default function App() {
           </div>
 
           {page === "overview" && <><Overview employees={employees} tasks={tasks} teams={teams} onRetry={() => setRefreshKey((key) => key + 1)} /><CoverageMetrics refreshKey={refreshKey} /></>}
-          {page === "cases" && <CasesPage employees={employees} refreshKey={refreshKey} />}
+          {page === "cases" && <CasesPage employees={employees} tasks={tasks} refreshKey={refreshKey} />}
           {page === "tasks" && <TasksPage resource={tasks} onRetry={() => setRefreshKey((key) => key + 1)} />}
           {page === "teams" && <TeamsPage resource={teams} onRetry={() => setRefreshKey((key) => key + 1)} />}
           {page === "slack" && <SlackSimulator />}
@@ -107,6 +107,15 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+function hasLegacyEmployees(employees: Resource<Employee[]>): boolean {
+  return employees.status === "error" && employees.error instanceof ApiError
+    && employees.error.code === "INCOMPLETE_SOURCE_DATA";
+}
+
+function LegacyEmployeesNotice() {
+  return <div className="notice notice-neutral" role="status"><p><strong>Dados legados incompletos de funcionários.</strong> A consulta /employees foi bloqueada pela validação da API. Nomes, contatos e total de funcionários estão indisponíveis. Os IDs em /tasks podem ser consultados sem inferir identidade ou destinatário Slack.</p></div>;
 }
 
 function Overview({ employees, tasks, teams, onRetry }: {
@@ -128,6 +137,7 @@ function Overview({ employees, tasks, teams, onRetry }: {
 
   return (
     <section className="stack">
+      {hasLegacyEmployees(employees) && <LegacyEmployeesNotice />}
       {(employees.status === "error" || tasks.status === "error" || teams.status === "error") && (
         <ErrorBanner message="Alguns dados não puderam ser carregados." onRetry={onRetry} />
       )}
@@ -302,13 +312,18 @@ function MetricCard({ label, value, detail, icon, tone }: {
   );
 }
 
-function CasesPage({ employees, refreshKey }: { employees: Resource<Employee[]>; refreshKey: number }) {
+function CasesPage({ employees, tasks, refreshKey }: { employees: Resource<Employee[]>; tasks: Resource<Task[]>; refreshKey: number }) {
   const [result, setResult] = useState<AbsenceCreated | null>(null);
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const legacy = hasLegacyEmployees(employees);
+  const taskEmployeeIds = legacy && tasks.status === "success"
+    ? [...new Set(tasks.data.map(task => task.assignee_employee_id).filter((id): id is string => Boolean(id)))].sort()
+    : [];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (employees.status !== "success") return;
     const formElement = event.currentTarget;
     setFormError("");
     setResult(null);
@@ -351,13 +366,15 @@ function CasesPage({ employees, refreshKey }: { employees: Resource<Employee[]>;
           <div><h2>Registrar ausência confirmada</h2><p>O backend cria o caso e vincula as tarefas abertas do turno.</p></div>
           <span className="panel-icon" aria-hidden="true">＋</span>
         </div>
+        {legacy && <><LegacyEmployeesNotice /><p className="field-hint">Seleção por ID somente para consulta. Registro de ausência indisponível até a fonte de funcionários ser corrigida; nenhum convite será enviado por esta seleção.</p></>}
         <form className="absence-form" onSubmit={submit}>
           <label>Funcionário
-            <select name="employee_id" required defaultValue="" disabled={employees.status !== "success"}>
+            <select name="employee_id" required defaultValue="" disabled={employees.status !== "success" && taskEmployeeIds.length === 0}>
               <option value="" disabled>{employees.status === "loading" ? "Carregando funcionários…" : "Selecione"}</option>
               {employees.status === "success" && employees.data.map((employee) => (
                 <option key={employee.employee_id} value={employee.employee_id}>{employee.name} · {employee.team_id}</option>
               ))}
+              {taskEmployeeIds.map(id => <option key={id} value={id}>{id} · ID registrado em /tasks</option>)}
             </select>
           </label>
           <div className="form-row">
@@ -373,7 +390,9 @@ function CasesPage({ employees, refreshKey }: { employees: Resource<Employee[]>;
             Confirmo que esta ausência foi registrada e está confirmada.
           </label>
           {formError && <div className="form-error" role="alert">{formError}</div>}
-          {employees.status === "error" && <InlineError error={employees.error} />}
+          {employees.status === "error" && !legacy && <InlineError error={employees.error} />}
+          {legacy && tasks.status === "error" && <InlineError error={tasks.error} />}
+          {legacy && tasks.status === "success" && taskEmployeeIds.length === 0 && <p role="status">Nenhum ID de funcionário disponível em /tasks.</p>}
           <button className="button button-primary" type="submit" disabled={submitting || employees.status !== "success" || employees.data.length === 0}>
             {submitting ? "Enviando…" : "Registrar ausência"}
           </button>

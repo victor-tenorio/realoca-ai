@@ -68,6 +68,44 @@ function mockApi(data: { employees?: Employee[]; tasks?: Task[]; teams?: Team[] 
 describe("Realoca AI frontend", () => {
   beforeEach(() => mockApi());
 
+  it("keeps legacy employee totals unknown and permits read-only selection of task owner IDs", async () => {
+    vi.mocked(api.listEmployees).mockRejectedValue(new ApiError("Fonte incompleta", 422, "INCOMPLETE_SOURCE_DATA"));
+    vi.mocked(api.listTasks).mockResolvedValue([task(), task({ task_id: "duplicate-owner" })]);
+    render(<App />);
+    await screen.findByText("Dados legados incompletos de funcionários.");
+    expect(within(screen.getByText("Funcionários publicados").parentElement!).getByText("—")).toBeTruthy();
+    expect(screen.getByText("Cobertura real dos casos")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Casos de Ausência/ }));
+    const select = await screen.findByLabelText("Funcionário") as HTMLSelectElement;
+    await waitFor(() => expect(select.disabled).toBe(false));
+    expect(select.options.length).toBe(2);
+    expect(select.options[1].text).toBe("emp-ana · ID registrado em /tasks");
+    fireEvent.change(select, { target: { value: "emp-ana" } });
+    expect(select.value).toBe("emp-ana");
+    expect((screen.getByRole("button", { name: "Registrar ausência" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.createAbsence).not.toHaveBeenCalled();
+    expect(api.planCase).not.toHaveBeenCalled();
+  });
+
+  it("does not invent fallback IDs when tasks also fail", async () => {
+    vi.mocked(api.listEmployees).mockRejectedValue(new ApiError("Fonte incompleta", 422, "INCOMPLETE_SOURCE_DATA"));
+    vi.mocked(api.listTasks).mockRejectedValue(new ApiError("Tarefas indisponíveis", 503, "DATABASE_UNAVAILABLE"));
+    render(<App />);
+    await screen.findByText("Dados legados incompletos de funcionários.");
+    fireEvent.click(screen.getByRole("button", { name: /Casos de Ausência/ }));
+    expect((screen.getByLabelText("Funcionário") as HTMLSelectElement).disabled).toBe(true);
+    expect(await screen.findByText("Tarefas indisponíveis")).toBeTruthy();
+  });
+
+  it("does not enable fallback selection for unrelated employee errors", async () => {
+    vi.mocked(api.listEmployees).mockRejectedValue(new ApiError("Indisponível", 503, "DATABASE_UNAVAILABLE"));
+    render(<App />);
+    await screen.findByText("Alguns dados não puderam ser carregados.");
+    fireEvent.click(screen.getByRole("button", { name: /Casos de Ausência/ }));
+    expect((screen.getByLabelText("Funcionário") as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.queryByText("Dados legados incompletos de funcionários.")).toBeNull();
+  });
+
   it("shows API-derived dashboard indicators and real coverage metrics", async () => {
     render(<App />);
     const cardLabel = await screen.findByText("Tarefas ativas");

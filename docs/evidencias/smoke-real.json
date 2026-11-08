@@ -1,0 +1,227 @@
+{
+  "timestamp": "2026-11-08T13:42:52.246Z",
+  "computer": "Amanda",
+  "base": "http://localhost:5173",
+  "backend": "http://127.0.0.1:8001",
+  "http": [
+    {
+      "path": "/health",
+      "backendStatus": 200,
+      "shape": "object",
+      "keys": [
+        "status"
+      ]
+    },
+    {
+      "path": "/api/v1/employees",
+      "backendStatus": 422,
+      "shape": "object",
+      "keys": [
+        "error"
+      ],
+      "proxyStatus": 422
+    },
+    {
+      "path": "/api/v1/tasks",
+      "backendStatus": 200,
+      "shape": "array",
+      "count": 187,
+      "keys": [
+        "task_id",
+        "title",
+        "assignee_employee_id",
+        "team_id",
+        "priority",
+        "due_at",
+        "estimated_hours",
+        "required_skills",
+        "status",
+        "transfer_allowed",
+        "source_system",
+        "external_id",
+        "updated_at"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/teams",
+      "backendStatus": 200,
+      "shape": "array",
+      "count": 4,
+      "keys": [
+        "team_id",
+        "name",
+        "reference_date",
+        "employee_count",
+        "shift_hours",
+        "committed_hours",
+        "reserved_hours",
+        "occupied_hours",
+        "utilization_pct",
+        "complete"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/cases",
+      "backendStatus": 200,
+      "shape": "object",
+      "count": 2,
+      "keys": [
+        "cases",
+        "total"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/dashboard",
+      "backendStatus": 200,
+      "shape": "object",
+      "keys": [
+        "confirmed_absences",
+        "cases_total",
+        "cases_open",
+        "affected_tasks",
+        "affected_hours",
+        "planned_hours",
+        "confirmed_hours",
+        "completed_hours",
+        "completed_tasks",
+        "in_progress_tasks",
+        "without_confirmed_coverage",
+        "affected_teams",
+        "refusals",
+        "expirations",
+        "escalations",
+        "pending_bp"
+      ],
+      "proxyStatus": 200
+    },
+    {
+      "path": "/api/v1/audit",
+      "backendStatus": 200,
+      "shape": "object",
+      "count": 47,
+      "keys": [
+        "total",
+        "events"
+      ],
+      "proxyStatus": 200
+    }
+  ],
+  "pages": [
+    {
+      "tab": "Visão Geral",
+      "heading": "Cobertura real dos casos",
+      "screenshot": "01-visao-geral.png",
+      "passed": true
+    },
+    {
+      "tab": "Casos de Ausência",
+      "heading": "Casos e propostas da API",
+      "screenshot": "02-casos.png",
+      "passed": true
+    },
+    {
+      "tab": "Tarefas",
+      "heading": "Tarefas do turno",
+      "screenshot": "03-tarefas.png",
+      "passed": true
+    },
+    {
+      "tab": "Equipes e Capacidade",
+      "heading": "Capacidade por equipe",
+      "screenshot": "04-equipes.png",
+      "passed": true
+    },
+    {
+      "tab": "Aprovações",
+      "heading": "Aprovações do BP",
+      "screenshot": "05-aprovacoes.png",
+      "passed": true
+    },
+    {
+      "tab": "Auditoria",
+      "heading": "Trilha auditável real",
+      "screenshot": "06-auditoria.png",
+      "passed": true
+    }
+  ],
+  "consoleErrors": [
+    {
+      "message": "Failed to load resource: the server responded with a status of 422 (Unprocessable Content)",
+      "url": "http://localhost:5173/api/v1/employees"
+    }
+  ],
+  "pageErrors": [],
+  "failedRequests": [
+    {
+      "url": "http://localhost:5173/api/v1/employees",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "http://localhost:5173/api/v1/tasks",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "http://localhost:5173/api/v1/teams",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "http://localhost:5173/api/v1/dashboard",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "http://localhost:5173/api/v1/cases",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "http://localhost:5173/api/v1/cases",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "http://localhost:5173/api/v1/audit",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    }
+  ],
+  "mutations": [],
+  "dashboard": {
+    "confirmed_absences": 2,
+    "cases_total": 2,
+    "cases_open": 2,
+    "affected_tasks": 10,
+    "affected_hours": 11,
+    "planned_hours": 11,
+    "confirmed_hours": 1,
+    "completed_hours": 0,
+    "completed_tasks": 0,
+    "in_progress_tasks": 5,
+    "without_confirmed_coverage": 9,
+    "affected_teams": 2,
+    "refusals": 1,
+    "expirations": 1,
+    "escalations": 0,
+    "pending_bp": 0
+  },
+  "expectedConsoleErrors": [
+    {
+      "message": "Failed to load resource: the server responded with a status of 422 (Unprocessable Content)",
+      "url": "http://localhost:5173/api/v1/employees"
+    }
+  ],
+  "passed": true
+}

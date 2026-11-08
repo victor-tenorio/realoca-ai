@@ -64,6 +64,7 @@ def _apply_accepted(session, event, attempt, now):
     reservation.released_at = now
     session.flush()  # SQLite trigger requires releasing before source reassignment.
     task.assignee_employee_id = employee.employee_id
+    task.status = TaskStatus.IN_PROGRESS
     task.updated_at = now
     session.add(TaskAssignment(
         assignment_id=f"assign-{uuid4()}", task_id=task.task_id,

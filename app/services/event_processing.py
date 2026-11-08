@@ -14,6 +14,7 @@ from app.models import (
     ProcessedEvent, Reservation, Shift, TaskAssignment,
 )
 from app.services import audit, capacity, cases, policy
+from app.services.deadlines import expiry_timestamp_reaches_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,8 @@ def _apply_declined(session, event, attempt, now):
     if attempt.reservation is None or attempt.reservation.released_at is not None:
         raise APIError(409, "RESERVATION_MISSING", "Sem reserva ativa", {})
     if event.event_type == IntegrationEventType.EXPIRED:
-        if (event.occurred_at < attempt.response_deadline_at
+        if (not expiry_timestamp_reaches_deadline(
+                event.occurred_at, attempt.response_deadline_at)
                 or event.received_at < attempt.response_deadline_at):
             raise APIError(409, "NOT_YET_EXPIRED", "Tentativa ainda no prazo", {})
         next_status = AttemptStatus.EXPIRED

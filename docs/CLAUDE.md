@@ -1,12 +1,14 @@
 CLAUDE.md — Backend Realoca AI
 
+Atualização 08/11/2026: Slack é o único canal de comunicação do MVP; remover implementação de Microsoft Teams.
+
 Converge Challenge 2026 · Branch: feat/backend-api · Dona: Amanda Leia este arquivo inteiro antes de gerar ou alterar código.
 
-Hierarquia de fontes: (1) docs/api-contract.md (Contrato Técnico de Integração v1.0) manda em rotas, JSON, nomes de campos, estados e eventos. (2) docs/spec.md (MVP) manda em regras de negócio. (3) Este arquivo resume os dois e define convenções de código. Em conflito, pare e pergunte; nunca "resolva" mudando o contrato.
+Hierarquia de fontes: (1) docs/api-contract.md (Contrato Técnico de Integração v1.1) manda em rotas, JSON, nomes de campos, estados e eventos. (2) docs/spec.md (MVP) manda em regras de negócio. (3) Este arquivo resume os dois e define convenções de código. Em conflito, pare e pergunte; nunca "resolva" mudando o contrato.
 
 1. O que é o projeto
 
-Plataforma B2B que mantém a continuidade das tarefas quando funcionários se ausentam: cruza RH, tarefas e capacidade, calcula um plano de cobertura global, coordena a execução por Teams/Slack, recupera recusas e acompanha até a confirmação. O produto realoca a responsabilidade pelas tarefas; não executa o trabalho delas.
+Plataforma B2B que mantém a continuidade das tarefas quando funcionários se ausentam: cruza RH, tarefas e capacidade, calcula um plano de cobertura global, coordena a execução por Slack, recupera recusas e acompanha até a confirmação. O produto realoca a responsabilidade pelas tarefas; não executa o trabalho delas.
 
 É um MVP de hackathon: dados 100% fictícios, integrações simuladas e rotuladas "Integração simulada", demo de 5 minutos. P1 nunca bloqueia a demo de ponta a ponta. Nada é declarado entregue sem evidência (teste passando).
 
@@ -14,7 +16,7 @@ Plataforma B2B que mantém a continuidade das tarefas quando funcionários se au
    Pessoa Dona de Não faz sem alinhar
    Amanda (eu/este repo) API HTTP, banco, estado de casos/tentativas, fonte simulada de tarefas, reservas, políticas, aprovação BP, auditoria, integração dos módulos Trocar payload contratado sem atualizar consumidores
    Mateus Motor Python determinístico (plan_coverage, replan_coverage) e frontend (Lovable) Gravar no meu banco; declarar tarefa atribuída porque o motor propôs
-   Victor Workflows n8n: eventos de entrada/saída, Teams/Slack (real ou simulado), lembretes/expiração Escolher substituto, mexer em carga, confirmar tarefa ou aprovar remanejamento
+   Victor Workflows n8n: eventos de entrada/saída, Slack (real ou simulado), lembretes/expiração Escolher substituto, mexer em carga, confirmar tarefa ou aprovar remanejamento
 
 Arquitetura: um backend HTTP central. O motor do Mateus é um módulo Python importado (sem segunda API). O n8n é um serviço separado ligado por webhooks HTTP. O frontend só chama a minha API.
 
@@ -197,7 +199,7 @@ Campos mínimos: audit_event_id, case_id, attempt_id?, actor, action, timestamp,
     Concorrência: três ausências simultâneas não excedem capacidade.
     Sem cobertura: BP recebe alternativas, status escalado, nunca falsa resolução.
     Origem: assignee só muda após aceite + aprovação aplicável.
-    Teams e Slack: envio e aceite/recusa em modo simulado rotulado.
+    Slack: envio e aceite/recusa em integração real ou simulação rotulada.
     Auditoria/UI: timeline e dashboard batem com eventos persistidos.
 
 Cenários da demo (spec seção 14, A–F) mapeiam para estes testes. Também testar: ausência duplicada, falha de canal, capacidade alterada desde o plano, transição inválida, evento em tentativa terminal. Relógio injetável (now()) para simular expiração.

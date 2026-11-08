@@ -41,6 +41,36 @@ def test_valid_example_produces_proposals(snapshot):
     assert all("status" not in item for item in result["assignments"])
 
 
+def test_higher_priority_precedes_nearer_deadline(snapshot):
+    snapshot["tasks"][0]["priority"] = "low"
+    snapshot["tasks"][0]["due_at"] = "2026-11-08T09:00:00-03:00"
+    snapshot["tasks"][1]["priority"] = "critical"
+    snapshot["tasks"][1]["due_at"] = "2026-11-09T09:00:00-03:00"
+    result = plan_coverage(snapshot)
+    assert [item["task_id"] for item in result["assignments"]] == ["task-B", "task-A"]
+
+
+def test_nearer_deadline_precedes_within_same_priority(snapshot):
+    snapshot["tasks"][0]["due_at"] = "2026-11-08T10:00:00-03:00"
+    snapshot["tasks"][1]["due_at"] = "2026-11-08T09:00:00-03:00"
+    result = plan_coverage(snapshot)
+    assert [item["task_id"] for item in result["assignments"]] == ["task-B", "task-A"]
+
+
+def test_equivalent_instants_with_different_offsets_tie_by_task_id(snapshot):
+    snapshot["tasks"][0]["due_at"] = "2026-11-08T10:00:00-03:00"
+    snapshot["tasks"][1]["due_at"] = "2026-11-08T13:00:00Z"
+    result = plan_coverage(snapshot)
+    assert [item["task_id"] for item in result["assignments"]] == ["task-A", "task-B"]
+
+
+def test_equal_priority_and_deadline_tie_by_task_id_not_input_order(snapshot):
+    snapshot["tasks"][1]["due_at"] = snapshot["tasks"][0]["due_at"]
+    snapshot["tasks"].reverse()
+    result = plan_coverage(snapshot)
+    assert [item["task_id"] for item in result["assignments"]] == ["task-A", "task-B"]
+
+
 def test_missing_field_fails(snapshot):
     del snapshot["case_id"]
     with pytest.raises(SnapshotValidationError, match="case_id"):
@@ -150,10 +180,21 @@ def test_all_excluded_candidates_leave_task_uncovered(snapshot):
     assert uncovered["task-A"] == "ALL_CANDIDATES_EXCLUDED"
 
 
-def test_completed_task_is_not_redistributed(snapshot):
+def test_completed_task_is_excluded_from_proposals_uncovered_and_demand(snapshot):
     snapshot["tasks"][0]["status"] = "done"
+    snapshot["tasks"][0]["transfer_allowed"] = False
     result = plan_coverage(snapshot)
-    assert result["uncovered"][0]["reason_code"] == "TASK_ALREADY_DONE"
+    assert [item["task_id"] for item in result["assignments"]] == ["task-B"]
+    assert all(item["task_id"] != "task-A" for item in result["uncovered"])
+    assert result["metrics"]["demand_hours"] == 2
+
+
+def test_active_non_transferable_task_remains_in_demand_and_uncovered(snapshot):
+    snapshot["tasks"][0]["transfer_allowed"] = False
+    result = plan_coverage(snapshot)
+    assert any(item["task_id"] == "task-A" for item in result["uncovered"])
+    assert result["uncovered"][0]["reason_code"] == "TRANSFER_NOT_ALLOWED"
+    assert result["metrics"]["demand_hours"] == 4
 
 
 @pytest.mark.parametrize("status", [None, [], "pending"])
@@ -171,12 +212,14 @@ def test_malformed_explicit_team_id_fails(snapshot, record):
         plan_coverage(snapshot)
 
 
-def test_same_team_candidate_preferred_when_cross_team_requires_approval(snapshot):
+def test_global_coverage_can_prefer_approval_required_candidate(snapshot):
     snapshot["employees"][1]["team_id"] = "other-team"
     result = plan_coverage(snapshot)
     first_task = next(item for item in result["assignments"] if item["task_id"] == "task-A")
-    assert first_task["candidate_employee_id"] == "emp-carlos"
-    assert "aprovação BP" not in first_task["reason"]
+    # Global coverage keeps Carlos for the Excel-only task, so Python is
+    # proposed to Pedro even though the cross-team policy requires BP review.
+    assert first_task["candidate_employee_id"] == "emp-pedro"
+    assert "aprovação BP" in first_task["reason"]
 
 
 def test_cross_team_candidate_remains_proposal_and_is_marked_for_approval(snapshot):
@@ -210,7 +253,7 @@ def test_cross_team_without_bp_requirement_is_not_marked_for_approval(snapshot):
     snapshot["policies"]["cross_team_requires_bp"] = False
     result = plan_coverage(snapshot)
     proposed = next(item for item in result["assignments"] if item["task_id"] == "task-A")
-    assert "aprovação BP" not in proposed["reason"]
+    assert "política permite proposta sem aprovação" in proposed["reason"]
 
 
 @pytest.mark.parametrize("availability", [None, [], "on_leave", "Available"])
@@ -403,3 +446,83 @@ def test_input_is_immutable(snapshot):
     before = deepcopy(snapshot)
     plan_coverage(snapshot)
     assert snapshot == before
+
+
+def test_global_search_finds_feasible_combination_missed_by_greedy(snapshot):
+    task_template = deepcopy(snapshot["tasks"][0])
+    snapshot["tasks"] = []
+    for task_id, hours in (("task-A", 2), ("task-B", 2), ("task-C", 3)):
+        task = deepcopy(task_template)
+        task.update(task_id=task_id, estimated_hours=hours, priority="high")
+        snapshot["tasks"].append(task)
+    snapshot["employees"] = [
+        {"employee_id": "emp-1", "team_id": "ops", "skills": ["python"], "shift_hours": 3,
+         "committed_hours": 0, "reserved_hours": 0, "availability": "available"},
+        {"employee_id": "emp-2", "team_id": "ops", "skills": ["python"], "shift_hours": 4,
+         "committed_hours": 0, "reserved_hours": 0, "availability": "available"},
+    ]
+    snapshot["absent_employee_ids"] = []
+    snapshot["policies"]["max_utilization_pct"] = 100
+
+    result = plan_coverage(snapshot)
+
+    assert len(result["assignments"]) == 3
+    assert result["uncovered"] == []
+    assert result["metrics"]["planned_hours"] == 7
+
+
+def test_optimizer_reduces_approval_required_proposals_after_coverage(snapshot):
+    snapshot["employees"][0]["team_id"] = "different-team"
+    snapshot["employees"][1]["team_id"] = "ops"
+    snapshot["tasks"] = [deepcopy(snapshot["tasks"][0])]
+
+    proposed = plan_coverage(snapshot)["assignments"][0]
+
+    assert proposed["candidate_employee_id"] == "emp-pedro"
+    assert "mesma equipe" in proposed["reason"]
+    assert "aprovação BP" not in proposed["reason"]
+
+
+def test_assignment_explanation_uses_snapshot_evidence(snapshot):
+    snapshot["tasks"] = [deepcopy(snapshot["tasks"][0])]
+    result = plan_coverage(snapshot)
+    explanation = result["assignments"][0]["reason"]
+
+    assert "Prioridade high" in explanation
+    assert "prazo 2026-11-08T10:00:00-03:00" in explanation
+    assert "python" in explanation
+    assert "2h" in explanation
+    assert "capacidade livre" in explanation
+    assert "proposta" in explanation
+    assert "aceita" not in explanation
+
+
+def test_replanning_exclusion_is_scoped_to_task_and_uses_updated_snapshot(snapshot):
+    snapshot["tasks"] = [deepcopy(snapshot["tasks"][0]), deepcopy(snapshot["tasks"][0])]
+    snapshot["tasks"][1]["task_id"] = "task-C"
+    snapshot["exclusions"] = [{"task_id": "task-A", "employee_id": "emp-pedro"}]
+    snapshot["employees"][1]["shift_hours"] = 4
+    snapshot["policies"]["max_utilization_pct"] = 100
+    before = deepcopy(snapshot)
+
+    result = replan_coverage(snapshot)
+
+    assert {item["task_id"]: item["candidate_employee_id"] for item in result["assignments"]} == {
+        "task-A": "emp-carlos", "task-C": "emp-pedro"
+    }
+    assert snapshot == before
+
+
+def test_optimizer_output_remains_deterministic_and_input_immutable(snapshot):
+    before = deepcopy(snapshot)
+
+    assert plan_coverage(snapshot) == plan_coverage(snapshot)
+    assert replan_coverage(snapshot) == plan_coverage(snapshot)
+    assert snapshot == before
+
+
+def test_optimizer_is_independent_of_employee_input_order(snapshot):
+    forward = plan_coverage(snapshot)
+    snapshot["employees"].reverse()
+
+    assert plan_coverage(snapshot) == forward

@@ -1,8 +1,7 @@
 """Deterministic, side-effect-free coverage proposal generation.
 
-This initial engine validates the snapshot and applies a deterministic greedy
-heuristic. Joint optimization, full deadline/shift feasibility, and complete
-policy handling remain future work (M03-M12).
+This engine validates and prioritizes deterministically, then searches for a
+joint feasible assignment. Search is bounded for predictable runtime.
 """
 
 from __future__ import annotations
@@ -42,82 +41,61 @@ def _plan(snapshot: dict) -> dict:
                          - _as_decimal(employee["reserved_hours"]))
         for employee_id, employee in employees.items()
     }
-    assignments: list[dict[str, Any]] = []
-    uncovered: list[dict[str, Any]] = []
+    # Completed work is retained in the validated snapshot but is not part of
+    # current planning demand and must not be reported as an uncovered task.
     tasks = sorted(
-        data["tasks"],
+        (task for task in data["tasks"] if task.get("status") != "done"),
         key=lambda task: (
             {"critical": 0, "high": 1, "medium": 2, "low": 3}[task["priority"]],
+            _iso_datetime(task["due_at"], f"task {task['task_id']} due_at"),
             task["task_id"],
         ),
     )
-
+    options: list[list[str]] = []
+    uncovered_reasons: dict[str, str] = {}
+    flexibility = {
+        employee_id: sum(
+            1 for task in tasks
+            if set(task["required_skills"]).issubset(employee["skills"])
+        )
+        for employee_id, employee in employees.items()
+    }
     for task in tasks:
-        if not task["transfer_allowed"]:
-            uncovered.append(_uncovered(task, "TRANSFER_NOT_ALLOWED", []))
-            continue
-        if task.get("status") == "done":
-            uncovered.append(_uncovered(task, "TASK_ALREADY_DONE", []))
-            continue
+        task_options, reason_code = _candidate_options(
+            task, employees, absent, exclusions, data["policies"], remaining
+        )
+        options.append(sorted(task_options, key=lambda eid: (flexibility[eid], eid)))
+        if reason_code:
+            uncovered_reasons[task["task_id"]] = reason_code
 
-        available_candidates = []
-        skill_candidates = []
-        non_excluded_candidates = []
-        candidates = []
-        for employee_id, employee in employees.items():
-            if employee_id in absent or employee["availability"] != "available":
-                continue
-            available_candidates.append(employee)
-            if not set(task["required_skills"]).issubset(employee["skills"]):
-                continue
-            skill_candidates.append(employee)
-            if employee_id in exclusions.get(task["task_id"], set()):
-                continue
-            non_excluded_candidates.append((employee_id, employee))
-            task_hours = _as_decimal(task["estimated_hours"])
-            if remaining[employee_id] < task_hours:
-                continue
-            # Prefer the least flexible eligible employee, then lower current
-            # utilization and stable employee ID. Avoid approval-required
-            # proposals when an otherwise eligible same-team option exists.
-            flexibility = sum(
-                1
-                for other in tasks
-                if set(other["required_skills"]).issubset(employee["skills"])
-            )
-            effective_capacity = _effective_capacity(employee, utilization)
-            used = effective_capacity - remaining[employee_id]
-            requires_approval = _requires_approval(task, employee, data["policies"])
-            candidates.append((requires_approval, flexibility, used, employee_id))
-
-        candidates.sort()
-        if not candidates:
-            if not available_candidates:
-                reason_code = "NO_AVAILABLE_CANDIDATE"
-            elif not skill_candidates:
-                reason_code = "NO_SKILL_MATCH"
-            elif not non_excluded_candidates:
-                reason_code = "ALL_CANDIDATES_EXCLUDED"
-            else:
-                reason_code = "INSUFFICIENT_CAPACITY"
+    selected, _ = _joint_assignment(tasks, options, employees, remaining, data["policies"])
+    assignments: list[dict[str, Any]] = []
+    uncovered: list[dict[str, Any]] = []
+    for task, candidate_id in zip(tasks, selected):
+        if candidate_id is None:
+            reason_code = uncovered_reasons.get(task["task_id"], "INSUFFICIENT_CAPACITY")
             uncovered.append(_uncovered(task, reason_code, []))
             continue
-
-        requires_approval, _, _, candidate_id = candidates[0]
-        task_hours = _as_decimal(task["estimated_hours"])
-        remaining[candidate_id] -= task_hours
+        employee = employees[candidate_id]
+        approval_note = _approval_explanation(task, employee, data["policies"])
+        free_capacity = remaining[candidate_id]
         skills = ", ".join(task["required_skills"])
-        approval_note = "; proposta requer aprovação BP segundo a política" if requires_approval else ""
-        assignments.append(
-            {
-                "task_id": task["task_id"],
-                "candidate_employee_id": candidate_id,
-                "estimated_hours": task["estimated_hours"],
-                "reason": f"Competências disponíveis ({skills}); candidato elegível{approval_note}",
-            }
+        team_note = _team_explanation(task, employee)
+        reason = (
+            f"Prioridade {task['priority']}; prazo {task['due_at']}; "
+            f"competências exigidas atendidas ({skills}); estimativa de "
+            f"{_clean_number(task['estimated_hours'])}h cabe na capacidade livre "
+            f"de {_clean_decimal(free_capacity)}h antes do plano"
+            f"{team_note}{approval_note}; proposta do planejador"
         )
+        assignments.append({
+            "task_id": task["task_id"],
+            "candidate_employee_id": candidate_id,
+            "estimated_hours": task["estimated_hours"],
+            "reason": reason,
+        })
 
-    demand_hours = sum(task["estimated_hours"] for task in data["tasks"])
+    demand_hours = sum(task["estimated_hours"] for task in tasks)
     planned_hours = sum(item["estimated_hours"] for item in assignments)
     return {
         "case_id": data["case_id"],
@@ -126,6 +104,136 @@ def _plan(snapshot: dict) -> dict:
         "uncovered": uncovered,
         "metrics": {"demand_hours": _clean_number(demand_hours), "planned_hours": _clean_number(planned_hours)},
     }
+
+
+_SEARCH_NODE_LIMIT = 50_000
+
+
+def _candidate_options(task, employees, absent, exclusions, policies, remaining):
+    if not task["transfer_allowed"]:
+        return [], "TRANSFER_NOT_ALLOWED"
+    available = [
+        (employee_id, employee) for employee_id, employee in employees.items()
+        if employee_id not in absent and employee["availability"] == "available"
+    ]
+    if not available:
+        return [], "NO_AVAILABLE_CANDIDATE"
+    skilled = [
+        (employee_id, employee) for employee_id, employee in available
+        if set(task["required_skills"]).issubset(employee["skills"])
+    ]
+    if not skilled:
+        return [], "NO_SKILL_MATCH"
+    eligible = [
+        employee_id for employee_id, employee in skilled
+        if employee_id not in exclusions.get(task["task_id"], set())
+    ]
+    if not eligible:
+        return [], "ALL_CANDIDATES_EXCLUDED"
+    # Keep candidates with less than this task's hours out of the search. The
+    # solver still accounts for contention between individually feasible tasks.
+    task_hours = _as_decimal(task["estimated_hours"])
+    eligible = [employee_id for employee_id in eligible if remaining[employee_id] >= task_hours]
+    if not eligible:
+        return [], "INSUFFICIENT_CAPACITY"
+    return eligible, ""
+
+
+def _joint_assignment(tasks, options, employees, initial_remaining, policies):
+    """Bounded deterministic DFS; returns a feasible incumbent if capped."""
+    remaining = dict(initial_remaining)
+    current: list[str | None] = [None] * len(tasks)
+    best = list(current)
+    best_score = _assignment_score(best, tasks, employees, initial_remaining, policies)
+    nodes = 0
+
+    def visit(index: int) -> None:
+        nonlocal nodes, best, best_score
+        if nodes >= _SEARCH_NODE_LIMIT:
+            return
+        nodes += 1
+        if index == len(tasks):
+            score = _assignment_score(current, tasks, employees, initial_remaining, policies)
+            if score > best_score:
+                best, best_score = list(current), score
+            return
+        task = tasks[index]
+        hours = _as_decimal(task["estimated_hours"])
+        # Candidate order is stable and favors constrained employees first.
+        for employee_id in options[index]:
+            if remaining[employee_id] < hours:
+                continue
+            current[index] = employee_id
+            remaining[employee_id] -= hours
+            visit(index + 1)
+            remaining[employee_id] += hours
+            current[index] = None
+        visit(index + 1)
+
+    visit(0)
+    return best, nodes < _SEARCH_NODE_LIMIT
+
+
+def _assignment_score(assignment, tasks, employees, initial_remaining, policies):
+    covered_by_priority = tuple(
+        sum(
+            1 for task, employee_id in zip(tasks, assignment)
+            if task["priority"] == priority and employee_id is not None
+        )
+        for priority in ("critical", "high", "medium", "low")
+    )
+    covered_in_task_order = tuple(1 if employee_id is not None else 0 for employee_id in assignment)
+    hours = sum((_as_decimal(task["estimated_hours"]) for task, eid in zip(tasks, assignment) if eid), Decimal("0"))
+    approvals = sum(
+        1 for task, eid in zip(tasks, assignment)
+        if eid is not None and _requires_approval(task, employees[eid], policies)
+    )
+    loads = {eid: initial_remaining[eid] for eid in employees}
+    for task, eid in zip(tasks, assignment):
+        if eid is not None:
+            loads[eid] -= _as_decimal(task["estimated_hours"])
+    utilization = []
+    for eid in sorted(employees):
+        employee = employees[eid]
+        capacity = _effective_capacity(employee, _as_decimal(policies["max_utilization_pct"]))
+        if capacity > 0:
+            utilization.append(((capacity - loads[eid]) / capacity) ** 2)
+    # Minimize the spread proxy and number of recipient employees after the
+    # higher-order coverage and approval criteria. Assignment tuple gives a
+    # stable final tie-break (IDs lexically smaller are preferred).
+    balance = -sum(utilization, Decimal("0"))
+    recipients = -len({eid for eid in assignment if eid is not None})
+    # Tasks were sorted by priority, due instant and ID. Prefer coverage of
+    # earlier tasks only after the higher-level objective tuple is tied.
+    tie = tuple("~" if eid is None else eid for eid in assignment)
+    inverse_tie = tuple(
+        "".join(chr(0x10ffff - ord(char)) for char in employee_id)
+        for employee_id in tie
+    )
+    return covered_by_priority, covered_in_task_order, hours, -approvals, balance, recipients, inverse_tie
+
+
+def _approval_explanation(task, employee, policies):
+    if not _requires_approval(task, employee, policies):
+        return "; política permite proposta sem aprovação"
+    if task["priority"] == "critical" and policies.get("critical_requires_bp", True):
+        return "; prioridade critical exige aprovação BP"
+    if _team_explanation(task, employee):
+        return "; política exige aprovação BP para atuação na mesma equipe"
+    return "; política exige aprovação BP para atuação entre equipes ou equipe não informada"
+
+
+def _team_explanation(task, employee):
+    task_team, employee_team = task.get("team_id"), employee.get("team_id")
+    if task_team is None or employee_team is None:
+        return "; equipe de origem ou do candidato não informada"
+    if task_team == employee_team:
+        return "; mesma equipe"
+    return f"; atuação entre equipes ({employee_team} para {task_team})"
+
+
+def _clean_decimal(value):
+    return _clean_number(float(value)) if value.adjusted() < 300 else str(value)
 
 
 def _normalize_snapshot(snapshot: dict) -> dict:
@@ -309,7 +417,7 @@ def _normalize_policies(policies: dict) -> dict:
     return normalized
 
 
-def _iso_datetime(value: Any, label: str) -> None:
+def _iso_datetime(value: Any, label: str) -> datetime:
     if not isinstance(value, str):
         raise SnapshotValidationError(f"{label} must be an ISO 8601 string")
     try:
@@ -318,6 +426,7 @@ def _iso_datetime(value: Any, label: str) -> None:
         raise SnapshotValidationError(f"{label} must be an ISO 8601 string") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise SnapshotValidationError(f"{label} must include a timezone")
+    return parsed
 
 
 def _required(data: dict, fields: tuple[str, ...], label: str) -> None:

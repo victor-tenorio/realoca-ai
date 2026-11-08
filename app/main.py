@@ -19,3 +19,4 @@ app.include_router(teams_router, prefix="/api/v1")
 app.include_router(integrations_router)
 
 register_error_handlers(app)
+

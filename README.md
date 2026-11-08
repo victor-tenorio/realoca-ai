@@ -237,7 +237,6 @@ aplicada. A transição com verificação de capacidade/política, liberação d
 atribuição e auditoria pertence ao processador de negócios posterior. O n8n deve
 enviar o payload no formato contratado (o JSON de saída dos botões, sozinho, ainda
 não é uma chamada a este endpoint). Execute `pytest -q` para os testes HTTP e gerais.
-
 ## Agente de impacto
 
 O registro de ausência agora grava uma análise detalhada das tarefas afetadas:

@@ -38,6 +38,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError):
+        # The API contract expects explicit 400 validation errors for malformed payloads.
         return error_response(400, "INVALID_REQUEST", "Parâmetros inválidos")
 
     @app.exception_handler(HTTPException)

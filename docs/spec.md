@@ -265,3 +265,78 @@ triggers, preservando RH, tarefas, turno e seed da revisão anterior; naturalmen
 descarta os registros dos módulos novos. Testes usam bancos temporários para
 upgrade vazio, atualização com seed existente, downgrade com dados novos e
 reaplicação. Nenhum endpoint, planejador ou schema público foi alterado.
+
+## Consultas de funcionários e tarefas — contrato v1.1
+
+As rotas de consulta agora publicadas são `GET /api/v1/employees` e
+`GET /api/v1/tasks`. Retornam arrays JSON diretos dos registros persistidos, com
+os campos do modelo comum do contrato, sem campos internos ou envelopes.
+Não há autenticação exigida para essas consultas no contrato atual; o token de
+integração servidor/n8n não foi aplicado às leituras. A autenticação do frontend
+permanece uma decisão pendente do contrato.
+
+O contrato não define filtros, paginação ou seleção de data por query string.
+Não foram acrescentados. Parâmetros desconhecidos são rejeitados com HTTP 400
+e `INVALID_QUERY_PARAMETERS`, em vez de serem ignorados. As tarefas incluem
+todos os estados oficiais no turno configurado, inclusive `done`; somente o
+cálculo de carga exclui concluídas. Esta leitura não implementa conclusão.
+
+### Período, projeção e publicação
+
+- O período é o único turno cuja `reference_date` coincide com
+  `DEMO_REFERENCE_DATE`. As listagens não criam turno, seed ou qualquer registro.
+  Sem pessoas cadastradas, a consulta retorna `[]`. Sem turno da data, tarefas
+  retorna `[]`, pois não existem tarefas desse período; havendo pessoas sem
+  capacidade de referência, funcionários retorna 422, sem presumir carga zero.
+- Capacidade individual usa as mesmas fórmulas de `services/capacity.py`, com
+  projeção em lote: tarefas abertas e reservas ativas somente do mesmo turno.
+  Não existem queries por pessoa/tarefa. O helper individual continua disponível;
+  a versão em lote compartilha a soma com propagação de desconhecidos e o cálculo.
+- `availability` é derivada: ausência confirmada que intersecciona o turno
+  (`starts_at < shift.ends_at` e `ends_at > shift.starts_at`) produz `absent`.
+  Sem essa ausência, capacidade conhecida zero produz `unavailable` para o turno;
+  vínculo com turno e capacidade positiva produz `available`, mesmo que a carga
+  já ocupe toda a capacidade. Não se infere folga por presença. A ausência tem
+  precedência sobre capacidade zero; nenhuma causa de ausência é publicada.
+  Outras causas de indisponibilidade pessoal ainda não têm fonte persistida e
+  não são inventadas por estas consultas.
+- Habilidades conhecidas vazias são arrays vazios. Habilidades desconhecidas não
+  viram arrays vazios; são pendências de publicação. Equipe de origem e ID do
+  responsável são retornados como campos separados da tarefa. Não se expõe um
+  indicador de transferência sem histórico, nem se acrescenta esse campo ao
+  contrato. A interface pode correlacionar o responsável com a lista de pessoas.
+- Schemas de saída são Pydantic separados dos modelos ORM, com enums oficiais,
+  datas com fuso e horas JSON numéricas. Campos opcionais da importação não foram
+  tornados opcionais no contrato público. Horas não são arredondadas durante a
+  soma; a serialização JSON é a apresentação final.
+
+A estratégia de publicação é bloquear **a listagem inteira** com HTTP 422 e
+`INCOMPLETE_SOURCE_DATA` se qualquer registro do escopo não puder cumprir o schema.
+Os detalhes identificam registros e nomes dos campos pendentes, sem expor dados
+médicos. Não se retorna lista parcial, não se omite registro inválido e não se
+publica `null` em campo obrigatório. Estimativa desconhecida em tarefa atribuída
+também bloqueia a carga do funcionário, não a transforma em soma parcial.
+
+O contrato v1.1 permite somente `slack`. O seed de novas bases usa Slack para
+todas as pessoas. Registros legados com `teams` permanecem no armazenamento
+histórico, porém bloqueiam a publicação de funcionários com pendência em
+`preferred_channel`; a consulta nunca os converte nem altera. Corrigir a fonte
+ou planejar a migração desses registros é uma ação explícita posterior. As
+migrações históricas e os testes de histórico não foram reescritos.
+
+Erros seguem `{"error":{"code":"...","message":"...","details":{}}}`.
+Validação de requisição usa 400, impedimento de publicação usa 422, falhas de
+banco usam 503 e falhas internas usam 500 sem mensagens SQL ou stack traces.
+Os handlers também normalizam 404/405. `/health` continua fora de `/api/v1`.
+
+### Equipes e frontend
+
+Não existe rota de equipes no contrato v1.1. A proposta concreta de rota, schema,
+exemplo e cálculo de agregados está em `docs/teams-query-proposal.md`, pendente
+de alinhamento com consumidores. Não é um endpoint implementado.
+
+Não há filtros contratados a validar por valor: testes verificam a rejeição de
+parâmetros não suportados. Novos filtros por equipe, status, prioridade ou
+responsável exigem definição no contrato. CORS não foi aberto genericamente:
+se o frontend usar outra origem, será necessário configurar explicitamente as
+origens autorizadas. PowerShell e o Swagger na mesma origem não dependem de CORS.

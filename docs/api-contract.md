@@ -1,10 +1,11 @@
-# Realoca AI — Contrato de API e integração v1.0
+# Realoca AI — Contrato de API e integração v1.1
 
 > Fonte de verdade: https://app.notion.com/p/4111e6cf66888114b1fcdbbd9a93e075
 > Esta documentação define interfaces a implementar; não afirma que endpoints já existem.
+> Atualização 08/11/2026: Slack é o único canal de comunicação do MVP. Microsoft Teams foi retirado do escopo.
 
 
-**REALOCA AI — CONTRATO TÉCNICO DE INTEGRAÇÃO v1.0**
+**REALOCA AI — CONTRATO TÉCNICO DE INTEGRAÇÃO v1.1**
 
 Decisão de arquitetura tomada em 07/11/2026 para implementação paralela por Amanda, Mateus e Victor. Este documento especifica o comportamento **esperado**; a existência dos endpoints no código e os testes devem ser verificados antes de marcá-los como entregues.
 
@@ -12,7 +13,7 @@ Decisão de arquitetura tomada em 07/11/2026 para implementação paralela por A
 **Fonte do produto:** [MVP](https://app.notion.com/p/4111e6cf668880c99eb2d4cd003a9d8e)
 **Checklist:** [DIVISÃO DE TAREFAS](https://app.notion.com/p/4111e6cf66888009976cd823b7a14e47)
 **Repositório:** [realoca-ai](https://github.com/victor-tenorio/realoca-ai)
-**Versão:** `1.0` — congelar nomes públicos dos campos até aprovação explícita do trio. Mudança incompatível exige nova versão e atualização de todos os consumidores.
+**Versão:** `1.1` — congelar nomes públicos dos campos até aprovação explícita do trio. Mudança incompatível exige nova versão e atualização de todos os consumidores.
 
 ## 1. Responsáveis e limites
 
@@ -20,7 +21,7 @@ Decisão de arquitetura tomada em 07/11/2026 para implementação paralela por A
 | --- | --- | --- |
 | **Amanda** | API HTTP, banco, estado de casos e tentativas, fonte simulada de tarefas, reservas e políticas, aprovação BP, auditoria, integração dos módulos | Trocar payload contratado sem atualizar consumidores |
 | **Mateus** | Funções determinísticas de impacto/capacidade/planejamento global; frontend gerado no Lovable e exportado para o repositório | Gravar diretamente no banco da Amanda; declarar tarefa atribuída só porque motor propôs |
-| **Victor** | Workflows n8n, entrada/saída de eventos, notificações Teams/Slack reais quando possível e simuladores quando não, lembretes/expiração | Escolher substituto, mexer na carga, confirmar tarefa ou aprovar remanejamento por conta própria |
+| **Victor** | Workflows n8n, entrada/saída de eventos, notificações Slack reais quando possível e simulador rotulado quando necessário, lembretes/expiração | Escolher substituto, mexer na carga, confirmar tarefa ou aprovar remanejamento por conta própria |
 
 **Decisão arquitetural:** um backend HTTP central; motor do Mateus chamado por Amanda como módulo Python dentro do projeto (não é necessário criar uma segunda API); n8n em serviço separado, conectado por webhooks HTTP; frontend JavaScript/React exportado do Lovable chama somente a API. A linguagem/framework HTTP permanece escolha de Amanda; as rotas e o JSON abaixo são o contrato obrigatório.
 
@@ -37,7 +38,7 @@ Decisão de arquitetura tomada em 07/11/2026 para implementação paralela por A
 
 ## 3. Modelo de dados comum
 
-**Funcionário**: `employee_id`, `name`, `team_id`, `skills[]`, `shift_hours`, `committed_hours`, `reserved_hours`, `availability` (`available`/`absent`/`unavailable`), `preferred_channel` (`teams`/`slack`), `channel_user_id`, `source_system`, `external_id`, `updated_at`.
+**Funcionário**: `employee_id`, `name`, `team_id`, `skills[]`, `shift_hours`, `committed_hours`, `reserved_hours`, `availability` (`available`/`absent`/`unavailable`), `preferred_channel` (`slack`), `channel_user_id`, `source_system`, `external_id`, `updated_at`.
 
 **Tarefa**: `task_id`, `title`, `assignee_employee_id`, `team_id`, `priority` (`critical`/`high`/`medium`/`low`), `due_at`, `estimated_hours`, `required_skills[]`, `status` (`open`/`in_progress`/`done`), `transfer_allowed`, `source_system`, `external_id`, `updated_at`.
 
@@ -173,14 +174,14 @@ O exemplo acima mostra formatos válidos de classificação; os valores reais de
   "due_at": "2026-11-08T10:00:00-03:00",
   "candidate_employee_id": "emp-pedro",
   "candidate_name": "Pedro",
-  "channel": "teams",
+  "channel": "slack",
   "channel_user_id": "user-demo-pedro",
   "response_deadline_at": "2026-11-08T08:15:00-03:00",
   "message": "Pedro, você pode assumir temporariamente a tarefa Automação Python (2h), com prazo às 10h? Aceitar / Recusar."
 }
 ```
 
-**Responsabilidade de Victor:** validar payload, selecionar adaptador `teams` ou `slack`, enviar/registrar convite, correlacionar `attempt_id` e devolver à API eventos de entrega/resposta. **Não** alterar dono da tarefa, não mudar capacidade e não escolher candidato. O canal real pode ser substituído por simulador declaradamente identificado, mantendo o mesmo JSON.
+**Responsabilidade de Victor:** validar payload, validar canal `slack` e destinatário, enviar/registrar convite, correlacionar `attempt_id` e devolver à API eventos de entrega/resposta. **Não** alterar dono da tarefa, não mudar capacidade e não escolher candidato. O canal real pode ser substituído por simulador declaradamente identificado, mantendo o mesmo JSON.
 
 ## 7. Victor → Amanda: webhook de retorno
 
@@ -193,7 +194,7 @@ O exemplo acima mostra formatos válidos de classificação; os valores reais de
   "event_id": "evt-in-001",
   "event_type": "offer.accepted",
   "attempt_id": "att-001",
-  "channel": "teams",
+  "channel": "slack",
   "occurred_at": "2026-11-08T08:05:00-03:00",
   "reason": null
 }
@@ -234,7 +235,7 @@ A aplicação exportada do Lovable usa `API_BASE_URL` configurável. Não chama 
 - **Aprovação BP:** `POST /api/v1/proposals/{attempt_id}/approval`.
 - **Equipe/tarefas:** `GET /api/v1/employees` e `GET /api/v1/tasks`.
 - **Auditoria:** `GET /api/v1/audit?case_id=...`.
-- **Simulador Teams/Slack:** UI envia resposta para webhook demo do n8n, nunca modifica atribuição direto no estado local.
+- **Simulador Slack:** UI envia resposta para webhook demo do n8n, nunca modifica atribuição direto no estado local.
 - **Estados visuais:** loading, error, empty, planned, approval, reserved/notified, accepted, refused, expired, escalated e completed.
 - Dados e indicadores devem refletir estados da API. **Sem ROI fictício nem cobertura de 100% antes de todos os aceites.**
 
@@ -250,7 +251,7 @@ A aplicação exportada do Lovable usa `API_BASE_URL` configurável. Não chama 
 8. **Concorrência:** três ausências simultâneas não ultrapassam capacidade global.
 9. **Sem cobertura:** BP recebe alternativas e status escalado, nunca falsa resolução.
 10. **Origem:** tarefa só troca responsável depois de aceite mais aprovação aplicável.
-11. **Teams e Slack:** ambos demonstram envio e aceite/recusa ao menos em modo simulado rotulado.
+11. **Slack:** demonstrar envio e aceite/recusa no canal único, com integração real quando disponível e simulador explicitamente rotulado quando necessário.
 12. **Auditoria/UI:** linha do tempo e dashboard batem com os eventos persistidos.
 
 ## 11. Contratos de entrega e sequenciamento
@@ -265,7 +266,7 @@ A aplicação exportada do Lovable usa `API_BASE_URL` configurável. Não chama 
 
 - O que ocorre se a ausência é duplicada? Retornar mesmo caso/indicar conflito, sem abrir duas coberturas.
 - O que ocorre se dois candidatos respondem quase simultaneamente? Só tentativa ativa é válida; validação transacional no backend.
-- O que ocorre se Teams/Slack falha? Não considerar tarefa aceita; registrar falha, retentar com limite e escalar se persistir.
+- O que ocorre se Slack falha? Não considerar tarefa aceita; registrar falha, retentar com limite e escalar se persistir.
 - O que ocorre se a capacidade mudou desde o plano? Revalidar, recusar commit e replanejar, sem sobrecarga.
 - O que ocorre se a empresa não registra tarefas? Mostrar apenas o conjunto cadastrado/importado e marcar dados ausentes; nunca deduzir tarefas não registradas.
 - O que ocorre se não há substituto? Fornecer alternativas ao BP e marcar tarefa descoberta.
